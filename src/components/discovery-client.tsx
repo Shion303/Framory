@@ -30,7 +30,7 @@ export function DiscoveryClient() {
     if (payload.autoImport?.warning) {
       setMessage(`AniList: ${payload.autoImport.warning}`);
     } else if (payload.autoImport?.imported) {
-      setMessage(`${payload.autoImport.imported} franchise importati automaticamente da AniList.`);
+      setMessage(`${payload.autoImport.imported} franchise importati o sincronizzati da AniList.`);
     } else {
       setMessage("");
     }

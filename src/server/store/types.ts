@@ -57,6 +57,7 @@ export type FramoryStore = {
   listFranchises(filters?: FranchiseFilters): Promise<{ items: Franchise[]; total: number; page: number; pageSize: number }>;
   getFranchiseBySlug(slug: string): Promise<Franchise | null>;
   getFranchiseById(id: string): Promise<Franchise | null>;
+  getFranchiseByWorkAniListId(anilistId: number): Promise<Franchise | null>;
   createFranchise(input: z.infer<typeof franchiseSchema>, actorId: string): Promise<Franchise>;
   updateFranchise(id: string, input: Partial<z.infer<typeof franchiseSchema>>, actorId: string): Promise<Franchise>;
   createCollection(input: z.infer<typeof collectionSchema>, actorId: string): Promise<Franchise>;

@@ -120,6 +120,23 @@ describe("FileStore", () => {
 
   it("importa automaticamente franchise AniList senza duplicati", async () => {
     const store = await freshStore();
+    const sequel: AniListImportCandidate = {
+      anilistId: 200001,
+      malId: null,
+      title: "Dungeon Meshi OVA",
+      titleRomaji: "Dungeon Meshi OVA",
+      titleEnglish: null,
+      titleNative: null,
+      description: "Episodio speciale collegato.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Fantasy"],
+      startYear: 2025,
+      format: "ova",
+      status: "annunciato",
+      duration: 24,
+      episodeCount: 1
+    };
     const candidate: AniListImportCandidate = {
       anilistId: 170942,
       malId: 58514,
@@ -135,19 +152,71 @@ describe("FileStore", () => {
       format: "tv",
       status: "concluso",
       duration: 24,
-      episodeCount: 3
+      episodeCount: 3,
+      relationIds: [sequel.anilistId],
+      relatedMedia: [sequel]
     };
 
     const imported = await store.autoImportAniListFranchises([candidate], { episodeCap: 2 });
     expect(imported).toHaveLength(1);
     expect(imported[0]).toMatchObject({ title: "Dungeon Meshi", slug: "dungeon-meshi" });
+    expect(imported[0].collections[0]).toMatchObject({ title: "Opere collegate AniList" });
+    expect(imported[0].works).toHaveLength(2);
     expect(imported[0].works[0]).toMatchObject({ anilistId: 170942, titleEnglish: "Delicious in Dungeon" });
     expect(imported[0].works[0].seasons[0].episodes).toHaveLength(2);
 
     const duplicate = await store.autoImportAniListFranchises([candidate]);
-    expect(duplicate).toHaveLength(0);
+    expect(duplicate).toHaveLength(1);
     await expect(store.listFranchises({ query: "Dungeon" })).resolves.toMatchObject({ total: 1 });
     await expect(store.listFranchises({ query: "Delicious" })).resolves.toMatchObject({ total: 1 });
+  });
+
+  it("fonde franchise AniList gia separati quando scopre relazioni", async () => {
+    const store = await freshStore();
+    const first: AniListImportCandidate = {
+      anilistId: 1,
+      malId: null,
+      title: "Serie Base",
+      titleRomaji: "Serie Base",
+      titleEnglish: null,
+      titleNative: null,
+      description: "Prima opera.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Azione"],
+      startYear: 2020,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+    const second: AniListImportCandidate = {
+      anilistId: 2,
+      malId: null,
+      title: "Serie Base 2",
+      titleRomaji: "Serie Base 2",
+      titleEnglish: null,
+      titleNative: null,
+      description: "Seconda opera.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Azione"],
+      startYear: 2021,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+
+    await store.autoImportAniListFranchises([first]);
+    await store.autoImportAniListFranchises([second]);
+    await expect(store.listFranchises()).resolves.toMatchObject({ total: 2 });
+
+    const merged = await store.autoImportAniListFranchises([{ ...first, relationIds: [second.anilistId], relatedMedia: [second] }]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].works.map((work) => work.anilistId).sort()).toEqual([1, 2]);
+    expect(merged[0].collections).toHaveLength(1);
+    await expect(store.listFranchises()).resolves.toMatchObject({ total: 1 });
   });
 
   it("semina il catalogo vuoto tramite AniList automatico", async () => {

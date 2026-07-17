@@ -19,7 +19,14 @@ import { clampScore, nowIso, slugify } from "@/lib/format";
 import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
 import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
-import { anilistEpisodeCap, episodeDrafts, franchiseDescription, seasonTitle } from "./anilist-import";
+import {
+  ANILIST_COLLECTION_TITLE,
+  anilistEpisodeCap,
+  episodeDrafts,
+  franchiseDescription,
+  groupAniListCandidates,
+  seasonTitle
+} from "./anilist-import";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type UserRecord = PublicUser & { passwordHash: string };
@@ -338,6 +345,12 @@ export class FileStore implements FramoryStore {
     return this.hydrateFranchise(data, id);
   }
 
+  async getFranchiseByWorkAniListId(anilistId: number) {
+    const data = await this.read();
+    const work = data.works.find((item) => item.anilistId === anilistId);
+    return work ? this.hydrateFranchise(data, work.franchiseId) : null;
+  }
+
   async createFranchise(input: Parameters<FramoryStore["createFranchise"]>[0], actorId: string) {
     const data = await this.read();
     const now = nowIso();
@@ -445,99 +458,39 @@ export class FileStore implements FramoryStore {
 
   async autoImportAniListFranchises(candidates: AniListImportCandidate[], options?: { episodeCap?: number }) {
     const data = await this.read();
-    const imported: Franchise[] = [];
+    const touched = new Set<string>();
     const cap = anilistEpisodeCap(options);
 
-    for (const candidate of candidates) {
-      if (data.works.some((item) => item.anilistId === candidate.anilistId)) {
-        continue;
-      }
-
+    for (const group of groupAniListCandidates(candidates)) {
       const now = nowIso();
-      const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
-      let slug = baseSlug;
-      let suffix = 2;
-      while (data.franchises.some((item) => item.slug === slug)) {
-        slug = `${baseSlug}-${suffix}`;
-        suffix += 1;
+      let franchiseId = this.findFranchiseIdByAniListIds(data, group.ids);
+
+      if (!franchiseId) {
+        franchiseId = this.createAniListFranchise(data, group.primary, now);
       }
 
-      const franchiseId = randomUUID();
-      const workId = randomUUID();
-      data.franchises.push({
-        id: franchiseId,
-        slug,
-        title: candidate.title,
-        description: franchiseDescription(candidate),
-        coverImage: nullableUrl(candidate.coverImage),
-        bannerImage: nullableUrl(candidate.bannerImage),
-        genres: candidate.genres,
-        startYear: candidate.startYear,
-        status: candidate.status,
-        isCompleteAdaptation: false,
-        createdAt: now,
-        updatedAt: now
-      });
-      data.works.push({
-        id: workId,
-        franchiseId,
-        collectionId: null,
-        title: candidate.title,
-        titleRomaji: candidate.titleRomaji,
-        titleEnglish: candidate.titleEnglish,
-        titleNative: candidate.titleNative,
-        description: candidate.description,
-        coverImage: nullableUrl(candidate.coverImage),
-        bannerImage: nullableUrl(candidate.bannerImage),
-        genres: candidate.genres,
-        startYear: candidate.startYear,
-        format: candidate.format,
-        status: candidate.status,
-        duration: candidate.duration,
-        episodeCount: candidate.episodeCount,
-        anilistId: candidate.anilistId,
-        malId: candidate.malId,
-        sortOrder: 0,
-        createdAt: now,
-        updatedAt: now
-      });
+      const collectionId = this.ensureAniListCollection(data, franchiseId, now);
+      this.mergeAniListFranchises(data, franchiseId, group.ids, collectionId);
 
-      const episodes = episodeDrafts(candidate, cap);
-      if (episodes.length) {
-        const seasonId = randomUUID();
-        data.seasons.push({
-          id: seasonId,
-          workId,
-          title: seasonTitle(candidate),
-          sortOrder: 0,
-          episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
-          createdAt: now,
-          updatedAt: now
-        });
-        data.episodes.push(
-          ...episodes.map((episode) => ({
-            id: randomUUID(),
-            seasonId,
-            title: episode.title,
-            number: episode.number,
-            duration: episode.duration,
-            airedAt: episode.airedAt,
-            createdAt: now,
-            updatedAt: now
-          }))
-        );
+      let sortOrder = data.works.filter((work) => work.franchiseId === franchiseId).length;
+      for (const candidate of group.candidates) {
+        if (data.works.some((item) => item.anilistId === candidate.anilistId)) {
+          continue;
+        }
+        this.addAniListWork(data, franchiseId, collectionId, candidate, cap, sortOrder, now);
+        sortOrder += 1;
       }
-
-      const franchise = this.hydrateFranchise(data, franchiseId);
-      if (franchise) {
-        imported.push(franchise);
-      }
+      touched.add(franchiseId);
     }
 
-    if (imported.length) {
+    const touchedFranchises = Array.from(touched)
+      .map((franchiseId) => this.hydrateFranchise(data, franchiseId))
+      .filter(Boolean) as Franchise[];
+
+    if (touchedFranchises.length) {
       await this.write(data);
     }
-    return imported;
+    return touchedFranchises;
   }
 
   async createSeason(input: Parameters<FramoryStore["createSeason"]>[0], actorId: string) {
@@ -1026,6 +979,166 @@ export class FileStore implements FramoryStore {
     const workIds = new Set(data.works.filter((work) => work.franchiseId === franchiseId).map((work) => work.id));
     const seasonIds = new Set(data.seasons.filter((season) => workIds.has(season.workId)).map((season) => season.id));
     return new Set(data.episodes.filter((episode) => seasonIds.has(episode.seasonId)).map((episode) => episode.id));
+  }
+
+  private findFranchiseIdByAniListIds(data: DataFile, ids: number[]) {
+    const idSet = new Set(ids);
+    const matching = data.works.filter((work) => typeof work.anilistId === "number" && idSet.has(work.anilistId));
+    if (!matching.length) {
+      return null;
+    }
+    return [...matching].sort((a, b) => {
+      const franchiseA = data.franchises.find((franchise) => franchise.id === a.franchiseId);
+      const franchiseB = data.franchises.find((franchise) => franchise.id === b.franchiseId);
+      return new Date(franchiseA?.createdAt ?? 0).getTime() - new Date(franchiseB?.createdAt ?? 0).getTime();
+    })[0].franchiseId;
+  }
+
+  private createAniListFranchise(data: DataFile, candidate: AniListImportCandidate, now: string) {
+    const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
+    let slug = baseSlug;
+    let suffix = 2;
+    while (data.franchises.some((item) => item.slug === slug)) {
+      slug = `${baseSlug}-${suffix}`;
+      suffix += 1;
+    }
+    const franchiseId = randomUUID();
+    data.franchises.push({
+      id: franchiseId,
+      slug,
+      title: candidate.title,
+      description: franchiseDescription(candidate),
+      coverImage: nullableUrl(candidate.coverImage),
+      bannerImage: nullableUrl(candidate.bannerImage),
+      genres: candidate.genres,
+      startYear: candidate.startYear,
+      status: candidate.status,
+      isCompleteAdaptation: false,
+      createdAt: now,
+      updatedAt: now
+    });
+    return franchiseId;
+  }
+
+  private ensureAniListCollection(data: DataFile, franchiseId: string, now: string) {
+    const existing = data.collections.find((collection) => collection.franchiseId === franchiseId && collection.title === ANILIST_COLLECTION_TITLE);
+    if (existing) {
+      return existing.id;
+    }
+    const collectionId = randomUUID();
+    data.collections.push({
+      id: collectionId,
+      franchiseId,
+      title: ANILIST_COLLECTION_TITLE,
+      description: "Raccoglitore creato automaticamente dalle relazioni AniList.",
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now
+    });
+    return collectionId;
+  }
+
+  private mergeAniListFranchises(data: DataFile, targetFranchiseId: string, ids: number[], collectionId: string) {
+    const idSet = new Set(ids);
+    const duplicateFranchiseIds = new Set(
+      data.works
+        .filter((work) => work.franchiseId !== targetFranchiseId && typeof work.anilistId === "number" && idSet.has(work.anilistId))
+        .map((work) => work.franchiseId)
+    );
+
+    for (const work of data.works) {
+      if (work.franchiseId === targetFranchiseId && typeof work.anilistId === "number" && idSet.has(work.anilistId)) {
+        work.collectionId = collectionId;
+        work.updatedAt = nowIso();
+      }
+      if (duplicateFranchiseIds.has(work.franchiseId)) {
+        work.franchiseId = targetFranchiseId;
+        work.collectionId = collectionId;
+        work.updatedAt = nowIso();
+      }
+    }
+
+    const libraryEntryIdsToRemove = new Set<string>();
+    for (const entry of data.libraryEntries) {
+      if (!duplicateFranchiseIds.has(entry.franchiseId)) {
+        continue;
+      }
+      const existing = data.libraryEntries.find(
+        (candidate) => candidate.userId === entry.userId && candidate.franchiseId === targetFranchiseId
+      );
+      if (existing) {
+        existing.updatedAt = nowIso();
+        libraryEntryIdsToRemove.add(entry.id);
+      } else {
+        entry.franchiseId = targetFranchiseId;
+        entry.updatedAt = nowIso();
+      }
+    }
+    data.libraryEntries = data.libraryEntries.filter((entry) => !libraryEntryIdsToRemove.has(entry.id));
+    data.collections = data.collections.filter((collection) => !duplicateFranchiseIds.has(collection.franchiseId));
+    data.franchises = data.franchises.filter((franchise) => !duplicateFranchiseIds.has(franchise.id));
+  }
+
+  private addAniListWork(
+    data: DataFile,
+    franchiseId: string,
+    collectionId: string,
+    candidate: AniListImportCandidate,
+    cap: number,
+    sortOrder: number,
+    now: string
+  ) {
+    const workId = randomUUID();
+    data.works.push({
+      id: workId,
+      franchiseId,
+      collectionId,
+      title: candidate.title,
+      titleRomaji: candidate.titleRomaji,
+      titleEnglish: candidate.titleEnglish,
+      titleNative: candidate.titleNative,
+      description: candidate.description,
+      coverImage: nullableUrl(candidate.coverImage),
+      bannerImage: nullableUrl(candidate.bannerImage),
+      genres: candidate.genres,
+      startYear: candidate.startYear,
+      format: candidate.format,
+      status: candidate.status,
+      duration: candidate.duration,
+      episodeCount: candidate.episodeCount,
+      anilistId: candidate.anilistId,
+      malId: candidate.malId,
+      sortOrder,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const episodes = episodeDrafts(candidate, cap);
+    if (!episodes.length) {
+      return;
+    }
+    const seasonId = randomUUID();
+    data.seasons.push({
+      id: seasonId,
+      workId,
+      title: seasonTitle(candidate),
+      sortOrder: 0,
+      episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
+      createdAt: now,
+      updatedAt: now
+    });
+    data.episodes.push(
+      ...episodes.map((episode) => ({
+        id: randomUUID(),
+        seasonId,
+        title: episode.title,
+        number: episode.number,
+        duration: episode.duration,
+        airedAt: episode.airedAt,
+        createdAt: now,
+        updatedAt: now
+      }))
+    );
   }
 
   private assertFranchise(data: DataFile, franchiseId: string) {

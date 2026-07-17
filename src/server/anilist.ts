@@ -4,6 +4,8 @@ import type { z } from "zod";
 type AniListMedia = {
   id: number;
   idMal?: number | null;
+  type?: string | null;
+  isAdult?: boolean | null;
   title?: {
     romaji?: string | null;
     english?: string | null;
@@ -18,6 +20,12 @@ type AniListMedia = {
   status?: string | null;
   duration?: number | null;
   episodes?: number | null;
+  relations?: {
+    edges?: Array<{
+      relationType?: string | null;
+      node?: AniListMedia | null;
+    } | null> | null;
+  } | null;
 };
 
 export type AniListImportCandidate = {
@@ -36,6 +44,8 @@ export type AniListImportCandidate = {
   status: z.infer<typeof workSchema>["status"];
   duration: number | null;
   episodeCount: number | null;
+  relationIds?: number[];
+  relatedMedia?: AniListImportCandidate[];
 };
 
 const formatMap: Record<string, z.infer<typeof workSchema>["format"]> = {
@@ -55,13 +65,29 @@ const statusMap: Record<string, z.infer<typeof workSchema>["status"]> = {
   HIATUS: "in_pausa"
 };
 
+const groupedRelationTypes = new Set([
+  "ADAPTATION",
+  "PREQUEL",
+  "SEQUEL",
+  "PARENT",
+  "SIDE_STORY",
+  "SUMMARY",
+  "ALTERNATIVE",
+  "SPIN_OFF",
+  "SOURCE",
+  "COMPILATION",
+  "CONTAINS"
+]);
+
 function stripHtml(value?: string | null) {
   return value?.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim() ?? null;
 }
 
-const mediaSelection = `
+const mediaCoreSelection = `
   id
   idMal
+  type
+  isAdult
   title { romaji english native }
   description
   coverImage { large }
@@ -72,6 +98,18 @@ const mediaSelection = `
   status
   duration
   episodes
+`;
+
+const mediaSelection = `
+  ${mediaCoreSelection}
+  relations {
+    edges {
+      relationType
+      node {
+        ${mediaCoreSelection}
+      }
+    }
+  }
 `;
 
 async function fetchAniListMedia(query: string, variables: Record<string, unknown>) {
@@ -95,7 +133,40 @@ async function fetchAniListMedia(query: string, variables: Record<string, unknow
     if (payload.errors?.length) {
       throw new Error("AniList ha restituito un errore.");
     }
-    return (payload.data?.Page?.media ?? []).map(mapAniListMedia);
+    return (payload.data?.Page?.media ?? []).map((media) => mapAniListMedia(media));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchAniListMediaById(id: number) {
+  const endpoint = process.env.ANILIST_GRAPHQL_URL ?? "https://graphql.anilist.co";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        query: `
+          query AnimeById($id: Int!) {
+            Media(id: $id, type: ANIME) {
+              ${mediaSelection}
+            }
+          }
+        `,
+        variables: { id }
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`AniList non disponibile (${response.status}).`);
+    }
+    const payload = (await response.json()) as { data?: { Media?: AniListMedia | null }; errors?: unknown[] };
+    if (payload.errors?.length) {
+      throw new Error("AniList ha restituito un errore.");
+    }
+    return payload.data?.Media ? mapAniListMedia(payload.data.Media) : null;
   } finally {
     clearTimeout(timeout);
   }
@@ -131,7 +202,22 @@ export async function getTrendingAniList(limit = 12) {
   );
 }
 
-export function mapAniListMedia(media: AniListMedia): AniListImportCandidate {
+export async function getAniListFranchiseCandidates(anilistId: number) {
+  const root = await fetchAniListMediaById(anilistId);
+  return root ? [root, ...(root.relatedMedia ?? [])] : [];
+}
+
+function relatedAnime(media: AniListMedia) {
+  return (
+    media.relations?.edges
+      ?.filter((edge) => edge?.node && edge.relationType && groupedRelationTypes.has(edge.relationType))
+      .map((edge) => edge?.node)
+      .filter((node): node is AniListMedia => Boolean(node && node.type === "ANIME" && !node.isAdult)) ?? []
+  );
+}
+
+export function mapAniListMedia(media: AniListMedia, includeRelated = true): AniListImportCandidate {
+  const relatedMedia = includeRelated ? relatedAnime(media).map((node) => mapAniListMedia(node, false)) : [];
   return {
     anilistId: media.id,
     malId: media.idMal ?? null,
@@ -147,6 +233,8 @@ export function mapAniListMedia(media: AniListMedia): AniListImportCandidate {
     format: media.format ? (formatMap[media.format] ?? "tv") : "tv",
     status: media.status ? (statusMap[media.status] ?? "annunciato") : "annunciato",
     duration: media.duration ?? null,
-    episodeCount: media.episodes ?? null
+    episodeCount: media.episodes ?? null,
+    relationIds: relatedMedia.map((item) => item.anilistId),
+    relatedMedia
   };
 }

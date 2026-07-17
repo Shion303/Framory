@@ -38,7 +38,14 @@ import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
 import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
 import { getPrismaClient } from "@/server/prisma";
-import { anilistEpisodeCap, episodeDrafts, franchiseDescription, seasonTitle } from "./anilist-import";
+import {
+  ANILIST_COLLECTION_TITLE,
+  anilistEpisodeCap,
+  episodeDrafts,
+  franchiseDescription,
+  groupAniListCandidates,
+  seasonTitle
+} from "./anilist-import";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type DbClient = InstanceType<typeof PrismaClient>;
@@ -408,6 +415,11 @@ export class PrismaStore implements FramoryStore {
     return row ? this.franchise(row) : null;
   }
 
+  async getFranchiseByWorkAniListId(anilistId: number) {
+    const work = await (await this.db()).work.findUnique({ where: { anilistId }, select: { franchiseId: true } });
+    return work ? this.getFranchiseById(work.franchiseId) : null;
+  }
+
   async createFranchise(input: Parameters<FramoryStore["createFranchise"]>[0], actorId: string) {
     const db = await this.db();
     let slug = slugify(input.title);
@@ -498,76 +510,32 @@ export class PrismaStore implements FramoryStore {
 
   async autoImportAniListFranchises(candidates: AniListImportCandidate[], options?: { episodeCap?: number }) {
     const db = await this.db();
-    const imported: Franchise[] = [];
+    const touched = new Set<string>();
     const cap = anilistEpisodeCap(options);
 
-    for (const candidate of candidates) {
-      const existing = await db.work.findUnique({ where: { anilistId: candidate.anilistId } });
-      if (existing) {
-        continue;
+    for (const group of groupAniListCandidates(candidates)) {
+      let franchiseId = await this.findFranchiseIdByAniListIds(db, group.ids);
+      if (!franchiseId) {
+        franchiseId = await this.createAniListFranchise(db, group.primary);
       }
 
-      const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
-      let slug = baseSlug;
-      let suffix = 2;
-      while (await db.franchise.findUnique({ where: { slug } })) {
-        slug = `${baseSlug}-${suffix}`;
-        suffix += 1;
-      }
+      const collectionId = await this.ensureAniListCollection(db, franchiseId);
+      await this.mergeAniListFranchises(db, franchiseId, group.ids, collectionId);
 
-      const episodes = episodeDrafts(candidate, cap);
-      const row = await db.franchise.create({
-        data: {
-          slug,
-          title: candidate.title,
-          description: franchiseDescription(candidate),
-          coverImage: nullableUrl(candidate.coverImage),
-          bannerImage: nullableUrl(candidate.bannerImage),
-          genres: candidate.genres,
-          startYear: candidate.startYear,
-          status: statusToDb[candidate.status],
-          isCompleteAdaptation: false,
-          works: {
-            create: {
-              title: candidate.title,
-              titleRomaji: candidate.titleRomaji,
-              titleEnglish: candidate.titleEnglish,
-              titleNative: candidate.titleNative,
-              description: candidate.description,
-              coverImage: nullableUrl(candidate.coverImage),
-              bannerImage: nullableUrl(candidate.bannerImage),
-              genres: candidate.genres,
-              startYear: candidate.startYear,
-              format: formatToDb[candidate.format],
-              status: statusToDb[candidate.status],
-              duration: candidate.duration,
-              episodeCount: candidate.episodeCount,
-              anilistId: candidate.anilistId,
-              malId: candidate.malId,
-              sortOrder: 0,
-              ...(episodes.length
-                ? {
-                    seasons: {
-                      create: {
-                        title: seasonTitle(candidate),
-                        sortOrder: 0,
-                        episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
-                        episodes: {
-                          create: episodes
-                        }
-                      }
-                    }
-                  }
-                : {})
-            }
-          }
-        },
-        include: franchiseInclude
-      });
-      imported.push(this.franchise(row));
+      let sortOrder = await db.work.count({ where: { franchiseId } });
+      for (const candidate of group.candidates) {
+        const existing = await db.work.findUnique({ where: { anilistId: candidate.anilistId } });
+        if (existing) {
+          continue;
+        }
+        await this.addAniListWork(db, franchiseId, collectionId, candidate, cap, sortOrder);
+        sortOrder += 1;
+      }
+      touched.add(franchiseId);
     }
 
-    return imported;
+    const franchises = await Promise.all(Array.from(touched).map((franchiseId) => this.getFranchiseById(franchiseId)));
+    return franchises.filter(Boolean) as Franchise[];
   }
 
   async createSeason(input: Parameters<FramoryStore["createSeason"]>[0], actorId: string) {
@@ -941,6 +909,137 @@ export class PrismaStore implements FramoryStore {
 
   private async db() {
     return (await getPrismaClient()) as DbClient;
+  }
+
+  private async findFranchiseIdByAniListIds(db: DbClient, ids: number[]) {
+    const rows = await db.work.findMany({
+      where: { anilistId: { in: ids } },
+      select: { franchiseId: true, franchise: { select: { createdAt: true } } }
+    });
+    return rows.sort((a, b) => a.franchise.createdAt.getTime() - b.franchise.createdAt.getTime())[0]?.franchiseId ?? null;
+  }
+
+  private async createAniListFranchise(db: DbClient, candidate: AniListImportCandidate) {
+    const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
+    let slug = baseSlug;
+    let suffix = 2;
+    while (await db.franchise.findUnique({ where: { slug } })) {
+      slug = `${baseSlug}-${suffix}`;
+      suffix += 1;
+    }
+    const row = await db.franchise.create({
+      data: {
+        slug,
+        title: candidate.title,
+        description: franchiseDescription(candidate),
+        coverImage: nullableUrl(candidate.coverImage),
+        bannerImage: nullableUrl(candidate.bannerImage),
+        genres: candidate.genres,
+        startYear: candidate.startYear,
+        status: statusToDb[candidate.status],
+        isCompleteAdaptation: false
+      },
+      select: { id: true }
+    });
+    return row.id;
+  }
+
+  private async ensureAniListCollection(db: DbClient, franchiseId: string) {
+    const existing = await db.collection.findFirst({ where: { franchiseId, title: ANILIST_COLLECTION_TITLE }, select: { id: true } });
+    if (existing) {
+      return existing.id;
+    }
+    const row = await db.collection.create({
+      data: {
+        franchiseId,
+        title: ANILIST_COLLECTION_TITLE,
+        description: "Raccoglitore creato automaticamente dalle relazioni AniList.",
+        sortOrder: 0
+      },
+      select: { id: true }
+    });
+    return row.id;
+  }
+
+  private async mergeAniListFranchises(db: DbClient, targetFranchiseId: string, ids: number[], collectionId: string) {
+    await db.work.updateMany({
+      where: { franchiseId: targetFranchiseId, anilistId: { in: ids } },
+      data: { collectionId }
+    });
+
+    const duplicates = await db.work.findMany({
+      where: { franchiseId: { not: targetFranchiseId }, anilistId: { in: ids } },
+      select: { franchiseId: true }
+    });
+    const duplicateFranchiseIds = Array.from(new Set(duplicates.map((work) => work.franchiseId)));
+    if (!duplicateFranchiseIds.length) {
+      return;
+    }
+
+    const libraryEntries = await db.libraryEntry.findMany({ where: { franchiseId: { in: duplicateFranchiseIds } } });
+    for (const entry of libraryEntries) {
+      const existing = await db.libraryEntry.findUnique({
+        where: { userId_franchiseId: { userId: entry.userId, franchiseId: targetFranchiseId } }
+      });
+      if (existing) {
+        await db.libraryEntry.delete({ where: { id: entry.id } });
+      } else {
+        await db.libraryEntry.update({ where: { id: entry.id }, data: { franchiseId: targetFranchiseId } });
+      }
+    }
+
+    await db.work.updateMany({
+      where: { franchiseId: { in: duplicateFranchiseIds } },
+      data: { franchiseId: targetFranchiseId, collectionId }
+    });
+    await db.franchise.deleteMany({ where: { id: { in: duplicateFranchiseIds } } });
+  }
+
+  private async addAniListWork(
+    db: DbClient,
+    franchiseId: string,
+    collectionId: string,
+    candidate: AniListImportCandidate,
+    cap: number,
+    sortOrder: number
+  ) {
+    const episodes = episodeDrafts(candidate, cap);
+    await db.work.create({
+      data: {
+        franchiseId,
+        collectionId,
+        title: candidate.title,
+        titleRomaji: candidate.titleRomaji,
+        titleEnglish: candidate.titleEnglish,
+        titleNative: candidate.titleNative,
+        description: candidate.description,
+        coverImage: nullableUrl(candidate.coverImage),
+        bannerImage: nullableUrl(candidate.bannerImage),
+        genres: candidate.genres,
+        startYear: candidate.startYear,
+        format: formatToDb[candidate.format],
+        status: statusToDb[candidate.status],
+        duration: candidate.duration,
+        episodeCount: candidate.episodeCount,
+        anilistId: candidate.anilistId,
+        malId: candidate.malId,
+        sortOrder,
+        ...(episodes.length
+          ? {
+              seasons: {
+                create: {
+                  title: seasonTitle(candidate),
+                  sortOrder: 0,
+                  episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
+                  episodes: {
+                    create: episodes
+                  }
+                }
+              }
+            }
+          : {})
+      }
+    });
   }
 
   private publicUser(user: {

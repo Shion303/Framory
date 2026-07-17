@@ -435,7 +435,7 @@ export function AdminClient() {
                   {result.startYear ?? "Anno n.d."} - {labels.workFormat[result.format]}
                 </p>
                 <button className="btn btn-ghost mt-3" onClick={() => importAniList(result)} type="button">
-                  <Download size={18} /> Importa nel franchise selezionato
+                  <Download size={18} /> Importa e collega automaticamente
                 </button>
               </div>
             ))}

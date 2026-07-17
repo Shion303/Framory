@@ -7,6 +7,7 @@ import { labels } from "@/lib/constants";
 import { apiJson } from "./client-utils";
 
 type Payload = { franchise: Franchise; library: LibraryEntry | null };
+type Work = Franchise["works"][number];
 
 export function FranchiseClient({ slug }: { slug: string }) {
   const [payload, setPayload] = useState<Payload | null>(null);
@@ -57,6 +58,22 @@ export function FranchiseClient({ slug }: { slug: string }) {
   const { franchise, library } = payload;
   const progress = library?.progress;
   const completedIds = new Set(progress?.completedEpisodeIds ?? []);
+  const groupedWorks = [
+    ...franchise.collections
+      .map((collection) => ({
+        id: collection.id,
+        title: collection.title,
+        description: collection.description,
+        works: franchise.works.filter((work) => work.collectionId === collection.id)
+      }))
+      .filter((group) => group.works.length > 0),
+    {
+      id: "senza-raccoglitore",
+      title: "Opere senza raccoglitore",
+      description: null,
+      works: franchise.works.filter((work) => !work.collectionId)
+    }
+  ].filter((group) => group.works.length > 0);
 
   return (
     <div className="space-y-6">
@@ -108,55 +125,26 @@ export function FranchiseClient({ slug }: { slug: string }) {
 
       <section className="space-y-4">
         <h2 className="text-2xl font-black">Struttura del franchise</h2>
-        {franchise.works.length ? (
-          franchise.works.map((work) => (
-            <article className="card p-5" key={work.id}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-bold uppercase text-violet-300">{labels.workFormat[work.format]}</p>
-                  <h3 className="text-2xl font-black">{work.title}</h3>
-                </div>
-                <span className="rounded-md bg-zinc-950 px-3 py-2 text-sm text-zinc-300">{labels.animeStatus[work.status]}</span>
+        {groupedWorks.length ? (
+          groupedWorks.map((group) => (
+            <div className="space-y-3" key={group.id}>
+              <div>
+                <h3 className="text-xl font-black text-zinc-50">{group.title}</h3>
+                {group.description ? <p className="mt-1 text-sm text-zinc-400">{group.description}</p> : null}
               </div>
-              <div className="mt-4 space-y-4">
-                {work.seasons.length ? (
-                  work.seasons.map((season) => (
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4" key={season.id}>
-                      <h4 className="font-bold">{season.title}</h4>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {season.episodes.length ? (
-                          season.episodes.map((episode) => {
-                            const isCompleted = completedOverrides[episode.id] ?? completedIds.has(episode.id);
-                            return (
-                              <label
-                                className="flex min-h-14 items-center gap-3 rounded-md border border-zinc-800 bg-black p-3 text-sm"
-                                key={episode.id}
-                              >
-                                <input
-                                  aria-label={`Segna episodio ${episode.number}`}
-                                  checked={isCompleted}
-                                  disabled={!library}
-                                  onChange={(event) => toggleEpisode(episode.id, event.target.checked)}
-                                  type="checkbox"
-                                />
-                                <span className="flex-1">
-                                  {episode.number}. {episode.title}
-                                </span>
-                                {isCompleted ? <CheckCircle2 className="text-violet-300" size={18} /> : null}
-                              </label>
-                            );
-                          })
-                        ) : (
-                          <p className="text-sm text-zinc-400">Nessun episodio registrato.</p>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-zinc-400">Nessuna stagione registrata.</p>
-                )}
+              <div className="space-y-4">
+                {group.works.map((work) => (
+                  <WorkArticle
+                    completedIds={completedIds}
+                    completedOverrides={completedOverrides}
+                    key={work.id}
+                    library={library}
+                    onToggleEpisode={toggleEpisode}
+                    work={work}
+                  />
+                ))}
               </div>
-            </article>
+            </div>
           ))
         ) : (
           <p className="card p-5 text-zinc-400">Nessuna opera registrata.</p>
@@ -168,5 +156,66 @@ export function FranchiseClient({ slug }: { slug: string }) {
         ) : null}
       </section>
     </div>
+  );
+}
+
+function WorkArticle({
+  work,
+  library,
+  completedIds,
+  completedOverrides,
+  onToggleEpisode
+}: {
+  work: Work;
+  library: LibraryEntry | null;
+  completedIds: Set<string>;
+  completedOverrides: Record<string, boolean>;
+  onToggleEpisode: (episodeId: string, completed: boolean) => void;
+}) {
+  return (
+    <article className="card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold uppercase text-violet-300">{labels.workFormat[work.format]}</p>
+          <h4 className="text-2xl font-black">{work.title}</h4>
+        </div>
+        <span className="rounded-md bg-zinc-950 px-3 py-2 text-sm text-zinc-300">{labels.animeStatus[work.status]}</span>
+      </div>
+      <div className="mt-4 space-y-4">
+        {work.seasons.length ? (
+          work.seasons.map((season) => (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4" key={season.id}>
+              <h5 className="font-bold">{season.title}</h5>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {season.episodes.length ? (
+                  season.episodes.map((episode) => {
+                    const isCompleted = completedOverrides[episode.id] ?? completedIds.has(episode.id);
+                    return (
+                      <label className="flex min-h-14 items-center gap-3 rounded-md border border-zinc-800 bg-black p-3 text-sm" key={episode.id}>
+                        <input
+                          aria-label={`Segna episodio ${episode.number}`}
+                          checked={isCompleted}
+                          disabled={!library}
+                          onChange={(event) => onToggleEpisode(episode.id, event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span className="flex-1">
+                          {episode.number}. {episode.title}
+                        </span>
+                        {isCompleted ? <CheckCircle2 className="text-violet-300" size={18} /> : null}
+                      </label>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-zinc-400">Nessun episodio registrato.</p>
+                )}
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="text-zinc-400">Nessuna stagione registrata.</p>
+        )}
+      </div>
+    </article>
   );
 }
