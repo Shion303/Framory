@@ -18,6 +18,7 @@ function warningFrom(error: unknown) {
 }
 
 let lastExistingRelationSyncAt = 0;
+const lastQuerySyncAt = new Map<string, number>();
 
 export async function ensureAniListCatalog(filters: FranchiseFilters = {}, options?: { limit?: number }): Promise<AniListAutoImportResult> {
   if (process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT === "1") {
@@ -32,16 +33,30 @@ export async function ensureAniListCatalog(filters: FranchiseFilters = {}, optio
     if (currentCatalog.total > 0) {
       return syncExistingAniListRelations(store, options);
     }
+  } else if (wasQuerySyncedRecently(query)) {
+    return { attempted: false, imported: 0 };
   }
 
   try {
-    const limit = importLimit(options?.limit);
+    const limit = importLimit(options?.limit ?? (query ? 25 : 12));
     const candidates = query ? await searchAniList(query) : await getTrendingAniList(limit);
     const imported = await store.autoImportAniListFranchises(candidates.slice(0, limit));
     return { attempted: true, imported: imported.length };
   } catch (error) {
     return { attempted: true, imported: 0, warning: warningFrom(error) };
   }
+}
+
+function wasQuerySyncedRecently(query: string) {
+  const key = query.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const now = Date.now();
+  const intervalMs = Number(process.env.FRAMORY_ANILIST_QUERY_SYNC_INTERVAL_MS ?? 60000);
+  const previous = lastQuerySyncAt.get(key) ?? 0;
+  if (now - previous < Math.max(5000, intervalMs)) {
+    return true;
+  }
+  lastQuerySyncAt.set(key, now);
+  return false;
 }
 
 async function syncExistingAniListRelations(store: FramoryStore, options?: { limit?: number }): Promise<AniListAutoImportResult> {

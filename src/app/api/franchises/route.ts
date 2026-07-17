@@ -22,8 +22,13 @@ export async function GET(request: Request) {
       page: page ? Number(page) : 1
     };
     const store = getStore();
-    let result = await store.listFranchises(filters);
     let autoImport = { attempted: false, imported: 0 };
+
+    if (filters.query?.trim()) {
+      autoImport = await ensureAniListCatalog(filters);
+    }
+
+    let result = await store.listFranchises(filters);
 
     if (result.total === 0 || !filters.query) {
       autoImport = await ensureAniListCatalog(filters);

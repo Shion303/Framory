@@ -46,6 +46,7 @@ import {
   groupAniListCandidates,
   seasonTitle
 } from "./anilist-import";
+import { franchiseMatchesQuery, paginateFranchises, sortFranchises } from "./search";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type DbClient = InstanceType<typeof PrismaClient>;
@@ -355,33 +356,20 @@ export class PrismaStore implements FramoryStore {
     const pageSize = 12;
     const page = Math.max(1, filters.page ?? 1);
     const where = {
-      ...(filters.query
-        ? {
-            OR: [
-              { title: { contains: filters.query, mode: "insensitive" as const } },
-              { description: { contains: filters.query, mode: "insensitive" as const } },
-              { genres: { has: filters.query } },
-              {
-                works: {
-                  some: {
-                    OR: [
-                      { title: { contains: filters.query, mode: "insensitive" as const } },
-                      { titleRomaji: { contains: filters.query, mode: "insensitive" as const } },
-                      { titleEnglish: { contains: filters.query, mode: "insensitive" as const } },
-                      { titleNative: { contains: filters.query, mode: "insensitive" as const } },
-                      { description: { contains: filters.query, mode: "insensitive" as const } },
-                      { genres: { has: filters.query } }
-                    ]
-                  }
-                }
-              }
-            ]
-          }
-        : {}),
       ...(filters.genre ? { genres: { has: filters.genre } } : {}),
       ...(filters.year ? { startYear: filters.year } : {}),
       ...(filters.status ? { status: statusToDb[filters.status] } : {})
     };
+    if (filters.query) {
+      const rows = await db.franchise.findMany({
+        where,
+        include: franchiseInclude,
+        orderBy: { title: "asc" }
+      });
+      const items = rows.map((row) => this.franchise(row)).filter((franchise) => franchiseMatchesQuery(franchise, filters.query as string));
+      return paginateFranchises(sortFranchises(items, filters.sort), page, pageSize);
+    }
+
     const orderBy =
       filters.sort === "year"
         ? { startYear: "desc" as const }

@@ -27,6 +27,7 @@ import {
   groupAniListCandidates,
   seasonTitle
 } from "./anilist-import";
+import { franchiseMatchesQuery, paginateFranchises, sortFranchises } from "./search";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type UserRecord = PublicUser & { passwordHash: string };
@@ -289,22 +290,7 @@ export class FileStore implements FramoryStore {
     let items = data.franchises.map((franchise) => this.hydrateFranchise(data, franchise.id)).filter(Boolean) as Franchise[];
 
     if (filters.query) {
-      const query = filters.query.toLowerCase();
-      items = items.filter(
-        (item) =>
-          item.title.toLowerCase().includes(query) ||
-          item.description.toLowerCase().includes(query) ||
-          item.genres.some((genre) => genre.toLowerCase().includes(query)) ||
-          item.works.some(
-            (work) =>
-              work.title.toLowerCase().includes(query) ||
-              (work.titleRomaji?.toLowerCase().includes(query) ?? false) ||
-              (work.titleEnglish?.toLowerCase().includes(query) ?? false) ||
-              (work.titleNative?.toLowerCase().includes(query) ?? false) ||
-              (work.description?.toLowerCase().includes(query) ?? false) ||
-              work.genres.some((genre) => genre.toLowerCase().includes(query))
-          )
-      );
+      items = items.filter((item) => franchiseMatchesQuery(item, filters.query as string));
     }
     if (filters.genre) {
       items = items.filter((item) => item.genres.some((genre) => genre.toLowerCase() === filters.genre?.toLowerCase()));
@@ -316,22 +302,7 @@ export class FileStore implements FramoryStore {
       items = items.filter((item) => item.status === filters.status);
     }
 
-    items = items.sort((a, b) => {
-      if (filters.sort === "year") {
-        return (b.startYear ?? 0) - (a.startYear ?? 0);
-      }
-      if (filters.sort === "works") {
-        return b.works.length - a.works.length;
-      }
-      if (filters.sort === "recent") {
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      }
-      return a.title.localeCompare(b.title, "it");
-    });
-
-    const total = items.length;
-    const start = (page - 1) * pageSize;
-    return { items: items.slice(start, start + pageSize), total, page, pageSize };
+    return paginateFranchises(sortFranchises(items, filters.sort), page, pageSize);
   }
 
   async listAniListWorkIds(limit = 12) {

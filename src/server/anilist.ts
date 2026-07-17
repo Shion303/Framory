@@ -176,7 +176,7 @@ export async function searchAniList(query: string) {
   return fetchAniListMedia(
     `
       query SearchAnime($search: String!) {
-        Page(page: 1, perPage: 10) {
+        Page(page: 1, perPage: 25) {
           media(search: $search, type: ANIME, sort: SEARCH_MATCH, isAdult: false) {
             ${mediaSelection}
           }

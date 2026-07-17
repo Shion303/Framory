@@ -219,6 +219,53 @@ describe("FileStore", () => {
     await expect(store.listFranchises()).resolves.toMatchObject({ total: 1 });
   });
 
+  it("trova Dr Stone come un solo risultato anche con punteggiatura diversa", async () => {
+    const store = await freshStore();
+    const first: AniListImportCandidate = {
+      anilistId: 105333,
+      malId: null,
+      title: "Dr. STONE",
+      titleRomaji: "Dr. STONE",
+      titleEnglish: "Dr. STONE",
+      titleNative: null,
+      description: "Prima stagione.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Avventura"],
+      startYear: 2019,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+    const second: AniListImportCandidate = {
+      anilistId: 113936,
+      malId: null,
+      title: "Dr. STONE: Stone Wars",
+      titleRomaji: "Dr. STONE: Stone Wars",
+      titleEnglish: "Dr. STONE: Stone Wars",
+      titleNative: null,
+      description: "Seconda stagione.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Avventura"],
+      startYear: 2021,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+
+    await store.autoImportAniListFranchises([first]);
+    await store.autoImportAniListFranchises([second]);
+    await expect(store.listFranchises({ query: "DR.STONE" })).resolves.toMatchObject({ total: 2 });
+
+    await store.autoImportAniListFranchises([{ ...first, relationIds: [second.anilistId], relatedMedia: [second] }]);
+    const result = await store.listFranchises({ query: "DR.STONE" });
+    expect(result.total).toBe(1);
+    expect(result.items[0].works.map((work) => work.title)).toEqual(["Dr. STONE", "Dr. STONE: Stone Wars"]);
+  });
+
   it("semina il catalogo vuoto tramite AniList automatico", async () => {
     const originalFetch = globalThis.fetch;
     const previousDisable = process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT;
@@ -262,6 +309,136 @@ describe("FileStore", () => {
     try {
       await expect(ensureAniListCatalog()).resolves.toMatchObject({ attempted: true, imported: 1 });
       await expect(getStore().listFranchises({ query: "One Piece" })).resolves.toMatchObject({ total: 1 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousDisable === undefined) {
+        delete process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT;
+      } else {
+        process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT = previousDisable;
+      }
+      if (previousStorage === undefined) {
+        delete process.env.FRAMORY_STORAGE;
+      } else {
+        process.env.FRAMORY_STORAGE = previousStorage;
+      }
+      if (previousDataFile === undefined) {
+        delete process.env.FRAMORY_DATA_FILE;
+      } else {
+        process.env.FRAMORY_DATA_FILE = previousDataFile;
+      }
+      if (previousAllowReset === undefined) {
+        delete process.env.FRAMORY_ALLOW_TEST_RESET;
+      } else {
+        process.env.FRAMORY_ALLOW_TEST_RESET = previousAllowReset;
+      }
+    }
+  });
+
+  it("sincronizza la query AniList prima di lasciare risultati duplicati", async () => {
+    const originalFetch = globalThis.fetch;
+    const previousDisable = process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT;
+    const previousStorage = process.env.FRAMORY_STORAGE;
+    const previousDataFile = process.env.FRAMORY_DATA_FILE;
+    const previousAllowReset = process.env.FRAMORY_ALLOW_TEST_RESET;
+    process.env.FRAMORY_STORAGE = "file";
+    process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT = "0";
+    process.env.FRAMORY_DATA_FILE = dataFile;
+    process.env.FRAMORY_ALLOW_TEST_RESET = "1";
+    await getStore().resetForTests();
+
+    const first: AniListImportCandidate = {
+      anilistId: 305333,
+      malId: null,
+      title: "Dr. STONE",
+      titleRomaji: "Dr. STONE",
+      titleEnglish: "Dr. STONE",
+      titleNative: null,
+      description: "Prima stagione.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Avventura"],
+      startYear: 2019,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+    const second: AniListImportCandidate = {
+      anilistId: 313936,
+      malId: null,
+      title: "Dr. STONE: Stone Wars",
+      titleRomaji: "Dr. STONE: Stone Wars",
+      titleEnglish: "Dr. STONE: Stone Wars",
+      titleNative: null,
+      description: "Seconda stagione.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Avventura"],
+      startYear: 2021,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 1
+    };
+    await getStore().autoImportAniListFranchises([first]);
+    await getStore().autoImportAniListFranchises([second]);
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            Page: {
+              media: [
+                {
+                  id: first.anilistId,
+                  idMal: null,
+                  type: "ANIME",
+                  isAdult: false,
+                  title: { romaji: first.titleRomaji, english: first.titleEnglish, native: null },
+                  description: first.description,
+                  coverImage: { large: null },
+                  bannerImage: null,
+                  genres: first.genres,
+                  seasonYear: first.startYear,
+                  format: "TV",
+                  status: "FINISHED",
+                  duration: first.duration,
+                  episodes: first.episodeCount,
+                  relations: {
+                    edges: [
+                      {
+                        relationType: "SEQUEL",
+                        node: {
+                          id: second.anilistId,
+                          idMal: null,
+                          type: "ANIME",
+                          isAdult: false,
+                          title: { romaji: second.titleRomaji, english: second.titleEnglish, native: null },
+                          description: second.description,
+                          coverImage: { large: null },
+                          bannerImage: null,
+                          genres: second.genres,
+                          seasonYear: second.startYear,
+                          format: "TV",
+                          status: "FINISHED",
+                          duration: second.duration,
+                          episodes: second.episodeCount
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      await expect(ensureAniListCatalog({ query: "DR.STONE" })).resolves.toMatchObject({ attempted: true, imported: 1 });
+      await expect(getStore().listFranchises({ query: "DR.STONE" })).resolves.toMatchObject({ total: 1 });
     } finally {
       globalThis.fetch = originalFetch;
       if (previousDisable === undefined) {
