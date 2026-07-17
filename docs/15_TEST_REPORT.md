@@ -19,6 +19,7 @@ Vitest copre:
 - hashing password bcrypt;
 - sessioni;
 - flusso catalogo, libreria, tracking e badge sullo store locale;
+- auto-import AniList idempotente nello store locale e coordinatore server con fetch mockato;
 - privacy profilo;
 - disattivazione account.
 

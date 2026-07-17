@@ -34,9 +34,11 @@ import type {
   WorkFormat
 } from "@/lib/types";
 import { clampScore, slugify } from "@/lib/format";
+import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
 import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
 import { getPrismaClient } from "@/server/prisma";
+import { anilistEpisodeCap, episodeDrafts, franchiseDescription, seasonTitle } from "./anilist-import";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type DbClient = InstanceType<typeof PrismaClient>;
@@ -351,7 +353,21 @@ export class PrismaStore implements FramoryStore {
             OR: [
               { title: { contains: filters.query, mode: "insensitive" as const } },
               { description: { contains: filters.query, mode: "insensitive" as const } },
-              { genres: { has: filters.query } }
+              { genres: { has: filters.query } },
+              {
+                works: {
+                  some: {
+                    OR: [
+                      { title: { contains: filters.query, mode: "insensitive" as const } },
+                      { titleRomaji: { contains: filters.query, mode: "insensitive" as const } },
+                      { titleEnglish: { contains: filters.query, mode: "insensitive" as const } },
+                      { titleNative: { contains: filters.query, mode: "insensitive" as const } },
+                      { description: { contains: filters.query, mode: "insensitive" as const } },
+                      { genres: { has: filters.query } }
+                    ]
+                  }
+                }
+              }
             ]
           }
         : {}),
@@ -478,6 +494,80 @@ export class PrismaStore implements FramoryStore {
     await this.adminLog(actorId, "Crea work", input.franchiseId, { title: input.title });
     await this.unlockAdminCreatedBadge(actorId);
     return (await this.getFranchiseById(input.franchiseId)) as Franchise;
+  }
+
+  async autoImportAniListFranchises(candidates: AniListImportCandidate[], options?: { episodeCap?: number }) {
+    const db = await this.db();
+    const imported: Franchise[] = [];
+    const cap = anilistEpisodeCap(options);
+
+    for (const candidate of candidates) {
+      const existing = await db.work.findUnique({ where: { anilistId: candidate.anilistId } });
+      if (existing) {
+        continue;
+      }
+
+      const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
+      let slug = baseSlug;
+      let suffix = 2;
+      while (await db.franchise.findUnique({ where: { slug } })) {
+        slug = `${baseSlug}-${suffix}`;
+        suffix += 1;
+      }
+
+      const episodes = episodeDrafts(candidate, cap);
+      const row = await db.franchise.create({
+        data: {
+          slug,
+          title: candidate.title,
+          description: franchiseDescription(candidate),
+          coverImage: nullableUrl(candidate.coverImage),
+          bannerImage: nullableUrl(candidate.bannerImage),
+          genres: candidate.genres,
+          startYear: candidate.startYear,
+          status: statusToDb[candidate.status],
+          isCompleteAdaptation: false,
+          works: {
+            create: {
+              title: candidate.title,
+              titleRomaji: candidate.titleRomaji,
+              titleEnglish: candidate.titleEnglish,
+              titleNative: candidate.titleNative,
+              description: candidate.description,
+              coverImage: nullableUrl(candidate.coverImage),
+              bannerImage: nullableUrl(candidate.bannerImage),
+              genres: candidate.genres,
+              startYear: candidate.startYear,
+              format: formatToDb[candidate.format],
+              status: statusToDb[candidate.status],
+              duration: candidate.duration,
+              episodeCount: candidate.episodeCount,
+              anilistId: candidate.anilistId,
+              malId: candidate.malId,
+              sortOrder: 0,
+              ...(episodes.length
+                ? {
+                    seasons: {
+                      create: {
+                        title: seasonTitle(candidate),
+                        sortOrder: 0,
+                        episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
+                        episodes: {
+                          create: episodes
+                        }
+                      }
+                    }
+                  }
+                : {})
+            }
+          }
+        },
+        include: franchiseInclude
+      });
+      imported.push(this.franchise(row));
+    }
+
+    return imported;
   }
 
   async createSeason(input: Parameters<FramoryStore["createSeason"]>[0], actorId: string) {

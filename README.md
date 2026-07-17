@@ -6,7 +6,7 @@ Framory è una piattaforma anime-first per catalogare franchise, tracciare episo
 Franchise -> Collection -> Work -> Season -> Episode
 ```
 
-AniList è usato solo come assistente di importazione per opere singole, mai come fonte della gerarchia dei franchise.
+AniList viene usato per popolare automaticamente il catalogo quando Framory non trova franchise o quando una ricerca non produce risultati locali. Ogni risultato AniList viene importato come franchise semplice con opera, stagione e placeholder episodi; Framory resta la fonte della gerarchia completa dei franchise.
 
 ## Stack
 
@@ -28,6 +28,12 @@ npm run dev
 ```
 
 Il file `.env` locale usa `FRAMORY_STORAGE=file` per consentire prove senza un database Supabase. In produzione usare `FRAMORY_STORAGE=prisma` e un `DATABASE_URL` PostgreSQL valido.
+
+L'import automatico AniList e' attivo di default. Per spegnerlo in test o ambienti senza rete:
+
+```bash
+FRAMORY_DISABLE_ANILIST_AUTO_IMPORT=1
+```
 
 ## Controlli
 

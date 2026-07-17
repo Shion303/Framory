@@ -7,7 +7,17 @@ import type { Franchise } from "@/lib/types";
 import { animeStatuses, labels } from "@/lib/constants";
 import { apiJson } from "./client-utils";
 
-type Result = { items: Franchise[]; total: number; page: number; pageSize: number };
+type Result = {
+  items: Franchise[];
+  total: number;
+  page: number;
+  pageSize: number;
+  autoImport?: {
+    attempted: boolean;
+    imported: number;
+    warning?: string;
+  };
+};
 
 export function DiscoveryClient() {
   const [result, setResult] = useState<Result | null>(null);
@@ -17,6 +27,13 @@ export function DiscoveryClient() {
   async function load(params = "") {
     const payload = await apiJson<Result>(`/api/franchises${params}`);
     setResult(payload);
+    if (payload.autoImport?.warning) {
+      setMessage(`AniList: ${payload.autoImport.warning}`);
+    } else if (payload.autoImport?.imported) {
+      setMessage(`${payload.autoImport.imported} franchise importati automaticamente da AniList.`);
+    } else {
+      setMessage("");
+    }
   }
 
   useEffect(() => {

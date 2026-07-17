@@ -17,6 +17,7 @@ jobs:
       FRAMORY_OWNER_USERNAME: owner
       FRAMORY_OWNER_PASSWORD: OwnerPassword123!
       FRAMORY_OWNER_DISPLAY_NAME: Owner Framory
+      FRAMORY_DISABLE_ANILIST_AUTO_IMPORT: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

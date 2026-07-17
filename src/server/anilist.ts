@@ -20,6 +20,24 @@ type AniListMedia = {
   episodes?: number | null;
 };
 
+export type AniListImportCandidate = {
+  anilistId: number;
+  malId: number | null;
+  title: string;
+  titleRomaji: string | null;
+  titleEnglish: string | null;
+  titleNative: string | null;
+  description: string | null;
+  coverImage: string | null;
+  bannerImage: string | null;
+  genres: string[];
+  startYear: number | null;
+  format: z.infer<typeof workSchema>["format"];
+  status: z.infer<typeof workSchema>["status"];
+  duration: number | null;
+  episodeCount: number | null;
+};
+
 const formatMap: Record<string, z.infer<typeof workSchema>["format"]> = {
   TV: "tv",
   MOVIE: "film",
@@ -41,7 +59,22 @@ function stripHtml(value?: string | null) {
   return value?.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim() ?? null;
 }
 
-export async function searchAniList(query: string) {
+const mediaSelection = `
+  id
+  idMal
+  title { romaji english native }
+  description
+  coverImage { large }
+  bannerImage
+  genres
+  seasonYear
+  format
+  status
+  duration
+  episodes
+`;
+
+async function fetchAniListMedia(query: string, variables: Record<string, unknown>) {
   const endpoint = process.env.ANILIST_GRAPHQL_URL ?? "https://graphql.anilist.co";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -51,27 +84,8 @@ export async function searchAniList(query: string) {
       headers: { "content-type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
-        query: `
-          query SearchAnime($search: String!) {
-            Page(page: 1, perPage: 10) {
-              media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-                id
-                idMal
-                title { romaji english native }
-                description
-                coverImage { large }
-                bannerImage
-                genres
-                seasonYear
-                format
-                status
-                duration
-                episodes
-              }
-            }
-          }
-        `,
-        variables: { search: query }
+        query,
+        variables
       })
     });
     if (!response.ok) {
@@ -87,7 +101,37 @@ export async function searchAniList(query: string) {
   }
 }
 
-export function mapAniListMedia(media: AniListMedia) {
+export async function searchAniList(query: string) {
+  return fetchAniListMedia(
+    `
+      query SearchAnime($search: String!) {
+        Page(page: 1, perPage: 10) {
+          media(search: $search, type: ANIME, sort: SEARCH_MATCH, isAdult: false) {
+            ${mediaSelection}
+          }
+        }
+      }
+    `,
+    { search: query }
+  );
+}
+
+export async function getTrendingAniList(limit = 12) {
+  return fetchAniListMedia(
+    `
+      query TrendingAnime($perPage: Int!) {
+        Page(page: 1, perPage: $perPage) {
+          media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
+            ${mediaSelection}
+          }
+        }
+      }
+    `,
+    { perPage: Math.max(1, Math.min(50, limit)) }
+  );
+}
+
+export function mapAniListMedia(media: AniListMedia): AniListImportCandidate {
   return {
     anilistId: media.id,
     malId: media.idMal ?? null,

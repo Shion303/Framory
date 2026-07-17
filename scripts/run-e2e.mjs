@@ -13,6 +13,7 @@ const e2eEnv = {
   FRAMORY_OWNER_PASSWORD: "OwnerPassword123!",
   FRAMORY_OWNER_DISPLAY_NAME: "Owner Framory",
   FRAMORY_SESSION_SECRET: "e2e-session-secret",
+  FRAMORY_DISABLE_ANILIST_AUTO_IMPORT: "1",
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/framory?schema=public",
   PLAYWRIGHT_SKIP_WEBSERVER: "1"
 };

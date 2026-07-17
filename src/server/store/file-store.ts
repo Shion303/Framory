@@ -16,8 +16,10 @@ import type {
   UserBadge
 } from "@/lib/types";
 import { clampScore, nowIso, slugify } from "@/lib/format";
+import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
 import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
+import { anilistEpisodeCap, episodeDrafts, franchiseDescription, seasonTitle } from "./anilist-import";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
 
 type UserRecord = PublicUser & { passwordHash: string };
@@ -285,7 +287,16 @@ export class FileStore implements FramoryStore {
         (item) =>
           item.title.toLowerCase().includes(query) ||
           item.description.toLowerCase().includes(query) ||
-          item.genres.some((genre) => genre.toLowerCase().includes(query))
+          item.genres.some((genre) => genre.toLowerCase().includes(query)) ||
+          item.works.some(
+            (work) =>
+              work.title.toLowerCase().includes(query) ||
+              (work.titleRomaji?.toLowerCase().includes(query) ?? false) ||
+              (work.titleEnglish?.toLowerCase().includes(query) ?? false) ||
+              (work.titleNative?.toLowerCase().includes(query) ?? false) ||
+              (work.description?.toLowerCase().includes(query) ?? false) ||
+              work.genres.some((genre) => genre.toLowerCase().includes(query))
+          )
       );
     }
     if (filters.genre) {
@@ -430,6 +441,103 @@ export class FileStore implements FramoryStore {
     this.unlockAdminCreatedBadge(data, actorId);
     await this.write(data);
     return this.hydrateFranchise(data, input.franchiseId) as Franchise;
+  }
+
+  async autoImportAniListFranchises(candidates: AniListImportCandidate[], options?: { episodeCap?: number }) {
+    const data = await this.read();
+    const imported: Franchise[] = [];
+    const cap = anilistEpisodeCap(options);
+
+    for (const candidate of candidates) {
+      if (data.works.some((item) => item.anilistId === candidate.anilistId)) {
+        continue;
+      }
+
+      const now = nowIso();
+      const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
+      let slug = baseSlug;
+      let suffix = 2;
+      while (data.franchises.some((item) => item.slug === slug)) {
+        slug = `${baseSlug}-${suffix}`;
+        suffix += 1;
+      }
+
+      const franchiseId = randomUUID();
+      const workId = randomUUID();
+      data.franchises.push({
+        id: franchiseId,
+        slug,
+        title: candidate.title,
+        description: franchiseDescription(candidate),
+        coverImage: nullableUrl(candidate.coverImage),
+        bannerImage: nullableUrl(candidate.bannerImage),
+        genres: candidate.genres,
+        startYear: candidate.startYear,
+        status: candidate.status,
+        isCompleteAdaptation: false,
+        createdAt: now,
+        updatedAt: now
+      });
+      data.works.push({
+        id: workId,
+        franchiseId,
+        collectionId: null,
+        title: candidate.title,
+        titleRomaji: candidate.titleRomaji,
+        titleEnglish: candidate.titleEnglish,
+        titleNative: candidate.titleNative,
+        description: candidate.description,
+        coverImage: nullableUrl(candidate.coverImage),
+        bannerImage: nullableUrl(candidate.bannerImage),
+        genres: candidate.genres,
+        startYear: candidate.startYear,
+        format: candidate.format,
+        status: candidate.status,
+        duration: candidate.duration,
+        episodeCount: candidate.episodeCount,
+        anilistId: candidate.anilistId,
+        malId: candidate.malId,
+        sortOrder: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      const episodes = episodeDrafts(candidate, cap);
+      if (episodes.length) {
+        const seasonId = randomUUID();
+        data.seasons.push({
+          id: seasonId,
+          workId,
+          title: seasonTitle(candidate),
+          sortOrder: 0,
+          episodeCount: candidate.format === "film" ? 1 : candidate.episodeCount,
+          createdAt: now,
+          updatedAt: now
+        });
+        data.episodes.push(
+          ...episodes.map((episode) => ({
+            id: randomUUID(),
+            seasonId,
+            title: episode.title,
+            number: episode.number,
+            duration: episode.duration,
+            airedAt: episode.airedAt,
+            createdAt: now,
+            updatedAt: now
+          }))
+        );
+      }
+
+      const franchise = this.hydrateFranchise(data, franchiseId);
+      if (franchise) {
+        imported.push(franchise);
+      }
+    }
+
+    if (imported.length) {
+      await this.write(data);
+    }
+    return imported;
   }
 
   async createSeason(input: Parameters<FramoryStore["createSeason"]>[0], actorId: string) {

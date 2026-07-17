@@ -1,7 +1,10 @@
 import { rm } from "node:fs/promises";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureAniListCatalog } from "@/server/auto-import";
+import { getStore } from "@/server/store";
 import { FileStore } from "@/server/store/file-store";
 import { hashPassword, verifyPassword } from "@/server/security";
+import type { AniListImportCandidate } from "@/server/anilist";
 
 const dataFile = ".framory/unit-data.json";
 
@@ -113,6 +116,106 @@ describe("FileStore", () => {
     expect(firstEpisode).toBeTruthy();
     const equipped = await store.equipBadge(user.id, firstEpisode!.badgeId, 1);
     expect(equipped.find((badge) => badge.badgeId === firstEpisode!.badgeId)?.equippedSlot).toBe(1);
+  });
+
+  it("importa automaticamente franchise AniList senza duplicati", async () => {
+    const store = await freshStore();
+    const candidate: AniListImportCandidate = {
+      anilistId: 170942,
+      malId: 58514,
+      title: "Dungeon Meshi",
+      titleRomaji: "Dungeon Meshi",
+      titleEnglish: "Delicious in Dungeon",
+      titleNative: null,
+      description: "Un party fantasy esplora dungeon e cucina mostri.",
+      coverImage: null,
+      bannerImage: null,
+      genres: ["Fantasy", "Avventura"],
+      startYear: 2024,
+      format: "tv",
+      status: "concluso",
+      duration: 24,
+      episodeCount: 3
+    };
+
+    const imported = await store.autoImportAniListFranchises([candidate], { episodeCap: 2 });
+    expect(imported).toHaveLength(1);
+    expect(imported[0]).toMatchObject({ title: "Dungeon Meshi", slug: "dungeon-meshi" });
+    expect(imported[0].works[0]).toMatchObject({ anilistId: 170942, titleEnglish: "Delicious in Dungeon" });
+    expect(imported[0].works[0].seasons[0].episodes).toHaveLength(2);
+
+    const duplicate = await store.autoImportAniListFranchises([candidate]);
+    expect(duplicate).toHaveLength(0);
+    await expect(store.listFranchises({ query: "Dungeon" })).resolves.toMatchObject({ total: 1 });
+    await expect(store.listFranchises({ query: "Delicious" })).resolves.toMatchObject({ total: 1 });
+  });
+
+  it("semina il catalogo vuoto tramite AniList automatico", async () => {
+    const originalFetch = globalThis.fetch;
+    const previousDisable = process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT;
+    const previousStorage = process.env.FRAMORY_STORAGE;
+    const previousDataFile = process.env.FRAMORY_DATA_FILE;
+    const previousAllowReset = process.env.FRAMORY_ALLOW_TEST_RESET;
+    process.env.FRAMORY_STORAGE = "file";
+    process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT = "0";
+    process.env.FRAMORY_DATA_FILE = dataFile;
+    process.env.FRAMORY_ALLOW_TEST_RESET = "1";
+    await getStore().resetForTests();
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            Page: {
+              media: [
+                {
+                  id: 21,
+                  idMal: 21,
+                  title: { romaji: "One Piece", english: "One Piece", native: null },
+                  description: "Avventura piratesca.",
+                  coverImage: { large: null },
+                  bannerImage: null,
+                  genres: ["Adventure"],
+                  seasonYear: 1999,
+                  format: "TV",
+                  status: "RELEASING",
+                  duration: 24,
+                  episodes: 2
+                }
+              ]
+            }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      await expect(ensureAniListCatalog()).resolves.toMatchObject({ attempted: true, imported: 1 });
+      await expect(getStore().listFranchises({ query: "One Piece" })).resolves.toMatchObject({ total: 1 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousDisable === undefined) {
+        delete process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT;
+      } else {
+        process.env.FRAMORY_DISABLE_ANILIST_AUTO_IMPORT = previousDisable;
+      }
+      if (previousStorage === undefined) {
+        delete process.env.FRAMORY_STORAGE;
+      } else {
+        process.env.FRAMORY_STORAGE = previousStorage;
+      }
+      if (previousDataFile === undefined) {
+        delete process.env.FRAMORY_DATA_FILE;
+      } else {
+        process.env.FRAMORY_DATA_FILE = previousDataFile;
+      }
+      if (previousAllowReset === undefined) {
+        delete process.env.FRAMORY_ALLOW_TEST_RESET;
+      } else {
+        process.env.FRAMORY_ALLOW_TEST_RESET = previousAllowReset;
+      }
+    }
   });
 
   it("applica privacy e disattivazione account lato server", async () => {

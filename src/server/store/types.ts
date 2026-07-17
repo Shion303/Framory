@@ -20,6 +20,7 @@ import type {
   userAdminUpdateSchema,
   workSchema
 } from "@/lib/validation";
+import type { AniListImportCandidate } from "@/server/anilist";
 import type { z } from "zod";
 
 export type UserWithPassword = PublicUser & { passwordHash: string };
@@ -60,6 +61,7 @@ export type FramoryStore = {
   updateFranchise(id: string, input: Partial<z.infer<typeof franchiseSchema>>, actorId: string): Promise<Franchise>;
   createCollection(input: z.infer<typeof collectionSchema>, actorId: string): Promise<Franchise>;
   createWork(input: z.infer<typeof workSchema>, actorId: string): Promise<Franchise>;
+  autoImportAniListFranchises(candidates: AniListImportCandidate[], options?: { episodeCap?: number }): Promise<Franchise[]>;
   createSeason(input: z.infer<typeof seasonSchema>, actorId: string): Promise<Franchise>;
   createEpisode(input: z.infer<typeof episodeSchema>, actorId: string): Promise<Franchise>;
   deleteFranchise(id: string, actorId: string): Promise<void>;

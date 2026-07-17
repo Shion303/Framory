@@ -13,14 +13,14 @@ La gerarchia anime è:
 Franchise -> Collection -> Work -> Season -> Episode
 ```
 
-La libreria utente contiene una sola voce per franchise. Il progresso è calcolato dagli episodi verso franchise. AniList è limitato a ricerca e import di singole opere dentro un franchise scelto da Admin.
+La libreria utente contiene una sola voce per franchise. Il progresso è calcolato dagli episodi verso franchise. AniList popola automaticamente il catalogo quando non esistono franchise o quando una ricerca non produce risultati locali, importando franchise semplici e idempotenti.
 
 ## Milestone completate
 
 - Fondazioni Next, tema scuro, env, Prisma, CI e README.
 - Autenticazione con bcrypt, sessioni, cookie `httpOnly`, ruoli e rate limit.
 - Catalogo Admin manuale per franchise, collection, work, season, episode.
-- Import AniList controllato.
+- Import AniList controllato e auto-import da catalogo vuoto/ricerche senza risultati.
 - Discovery per franchise, libreria, tracking episodi e home con statistiche.
 - Pagina franchise, profilo, privacy, badge, attività e moderazione base.
 - Health check, deploy guide, maintenance guide e policy placeholder.
