@@ -510,6 +510,30 @@ export class PrismaStore implements FramoryStore {
     return (await this.getFranchiseById(season.work.franchiseId)) as Franchise;
   }
 
+  async deleteFranchise(id: string, actorId: string) {
+    await this.assertAdmin(actorId);
+    await (await this.db()).franchise.delete({ where: { id } });
+    await this.adminLog(actorId, "Elimina franchise", id);
+  }
+
+  async deleteWork(id: string, actorId: string) {
+    await this.assertAdmin(actorId);
+    await (await this.db()).work.delete({ where: { id } });
+    await this.adminLog(actorId, "Elimina work", id);
+  }
+
+  async deleteSeason(id: string, actorId: string) {
+    await this.assertAdmin(actorId);
+    await (await this.db()).season.delete({ where: { id } });
+    await this.adminLog(actorId, "Elimina season", id);
+  }
+
+  async deleteEpisode(id: string, actorId: string) {
+    await this.assertAdmin(actorId);
+    await (await this.db()).episode.delete({ where: { id } });
+    await this.adminLog(actorId, "Elimina episodio", id);
+  }
+
   async getLibrary(userId: string) {
     const rows = await (await this.db()).libraryEntry.findMany({
       where: { userId },
@@ -766,6 +790,22 @@ export class PrismaStore implements FramoryStore {
     });
     await this.adminLog(actorId, "Aggiorna segnalazione", reportId, { status });
     return this.report(row);
+  }
+
+  async getMaintenanceMode() {
+    const setting = await (await this.db()).platformSetting.findUnique({ where: { key: "maintenanceMode" } });
+    return Boolean(setting?.value);
+  }
+
+  async setMaintenanceMode(actorId: string, enabled: boolean) {
+    await this.assertAdmin(actorId);
+    await (await this.db()).platformSetting.upsert({
+      where: { key: "maintenanceMode" },
+      update: { value: enabled },
+      create: { key: "maintenanceMode", value: enabled }
+    });
+    await this.adminLog(actorId, "Aggiorna manutenzione", "platform", { enabled });
+    return enabled;
   }
 
   async getAdminSnapshot(): Promise<AdminSnapshot> {

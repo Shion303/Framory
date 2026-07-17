@@ -13,3 +13,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return jsonError(error, 403);
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const user = await requireAdmin();
+    const { id } = await context.params;
+    await getStore().deleteFranchise(id, user.id);
+    return jsonOk({ ok: true });
+  } catch (error) {
+    return jsonError(error, 403);
+  }
+}

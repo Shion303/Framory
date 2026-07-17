@@ -38,10 +38,15 @@ export function AdminClient() {
   const [selectedSeasonId, setSelectedSeasonId] = useState("");
   const [message, setMessage] = useState("");
   const [aniListResults, setAniListResults] = useState<AniListResult[]>([]);
+  const [maintenanceMode, setMaintenanceModeState] = useState(false);
 
   async function load() {
-    const payload = await apiJson<Snapshot>("/api/admin");
+    const [payload, maintenance] = await Promise.all([
+      apiJson<Snapshot>("/api/admin"),
+      apiJson<{ enabled: boolean }>("/api/admin/settings/maintenance")
+    ]);
     setSnapshot(payload);
+    setMaintenanceModeState(maintenance.enabled);
     setSelectedFranchiseId((current) => current || payload.franchises[0]?.id || "");
   }
 
@@ -187,6 +192,32 @@ export function AdminClient() {
     }
   }
 
+  async function deleteEntity(label: string, url: string) {
+    if (!window.confirm(`Confermi eliminazione sicura di ${label}?`)) {
+      return;
+    }
+    try {
+      await apiJson(url, { method: "DELETE" });
+      await load();
+      setMessage("Eliminazione completata.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Eliminazione non riuscita.");
+    }
+  }
+
+  async function toggleMaintenance(enabled: boolean) {
+    try {
+      const payload = await apiJson<{ enabled: boolean }>("/api/admin/settings/maintenance", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled })
+      });
+      setMaintenanceModeState(payload.enabled);
+      setMessage(payload.enabled ? "Modalità manutenzione attivata." : "Modalità manutenzione disattivata.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Aggiornamento manutenzione non riuscito.");
+    }
+  }
+
   async function grantBadge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -274,6 +305,32 @@ export function AdminClient() {
                 </option>
               ))}
             </select>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {selectedFranchise ? (
+                <button className="btn btn-ghost" onClick={() => deleteEntity(selectedFranchise.title, `/api/admin/franchises/${selectedFranchise.id}`)} type="button">
+                  Elimina franchise
+                </button>
+              ) : null}
+              {selectedWork ? (
+                <button className="btn btn-ghost" onClick={() => deleteEntity(selectedWork.title, `/api/admin/works/${selectedWork.id}`)} type="button">
+                  Elimina work
+                </button>
+              ) : null}
+              {selectedSeason ? (
+                <button className="btn btn-ghost" onClick={() => deleteEntity(selectedSeason.title, `/api/admin/seasons/${selectedSeason.id}`)} type="button">
+                  Elimina season
+                </button>
+              ) : null}
+              {selectedSeason?.episodes[0] ? (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => deleteEntity(selectedSeason.episodes[0].title, `/api/admin/episodes/${selectedSeason.episodes[0].id}`)}
+                  type="button"
+                >
+                  Elimina primo episodio
+                </button>
+              ) : null}
+            </div>
           </div>
         </Panel>
 
@@ -437,6 +494,13 @@ export function AdminClient() {
             </div>
           ))}
         </div>
+      </Panel>
+
+      <Panel title="Impostazioni piattaforma">
+        <label className="flex items-center gap-3 text-sm font-bold">
+          <input checked={maintenanceMode} onChange={(event) => toggleMaintenance(event.target.checked)} type="checkbox" />
+          Modalità manutenzione
+        </label>
       </Panel>
 
       <Panel title="Segnalazioni">

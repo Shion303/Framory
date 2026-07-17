@@ -62,6 +62,10 @@ export type FramoryStore = {
   createWork(input: z.infer<typeof workSchema>, actorId: string): Promise<Franchise>;
   createSeason(input: z.infer<typeof seasonSchema>, actorId: string): Promise<Franchise>;
   createEpisode(input: z.infer<typeof episodeSchema>, actorId: string): Promise<Franchise>;
+  deleteFranchise(id: string, actorId: string): Promise<void>;
+  deleteWork(id: string, actorId: string): Promise<void>;
+  deleteSeason(id: string, actorId: string): Promise<void>;
+  deleteEpisode(id: string, actorId: string): Promise<void>;
   getLibrary(userId: string): Promise<LibraryEntry[]>;
   addToLibrary(userId: string, franchiseId: string): Promise<LibraryEntry>;
   updateLibrary(userId: string, franchiseId: string, input: z.infer<typeof libraryUpdateSchema>): Promise<LibraryEntry>;
@@ -81,6 +85,8 @@ export type FramoryStore = {
   } | null>;
   createReport(userId: string, input: { targetType: string; targetId: string; reason: string }): Promise<Report>;
   updateReport(actorId: string, reportId: string, status: Report["status"]): Promise<Report>;
+  getMaintenanceMode(): Promise<boolean>;
+  setMaintenanceMode(actorId: string, enabled: boolean): Promise<boolean>;
   getAdminSnapshot(): Promise<AdminSnapshot>;
   updateUser(actorId: string, userId: string, input: z.infer<typeof userAdminUpdateSchema>): Promise<PublicUser>;
 };

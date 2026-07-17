@@ -54,6 +54,9 @@ type DataFile = {
   activities: Activity[];
   reports: ReportRecord[];
   adminLogs: AdminLog[];
+  settings: {
+    maintenanceMode: boolean;
+  };
 };
 
 const emptyData = (): DataFile => ({
@@ -70,7 +73,10 @@ const emptyData = (): DataFile => ({
   userBadges: [],
   activities: [],
   reports: [],
-  adminLogs: []
+  adminLogs: [],
+  settings: {
+    maintenanceMode: false
+  }
 });
 
 const defaultBadges: Array<Omit<Badge, "id">> = [
@@ -476,6 +482,69 @@ export class FileStore implements FramoryStore {
     return this.hydrateFranchise(data, work.franchiseId) as Franchise;
   }
 
+  async deleteFranchise(id: string, actorId: string) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const workIds = new Set(data.works.filter((work) => work.franchiseId === id).map((work) => work.id));
+    const seasonIds = new Set(data.seasons.filter((season) => workIds.has(season.workId)).map((season) => season.id));
+    const episodeIds = new Set(data.episodes.filter((episode) => seasonIds.has(episode.seasonId)).map((episode) => episode.id));
+    data.franchises = data.franchises.filter((franchise) => franchise.id !== id);
+    data.collections = data.collections.filter((collection) => collection.franchiseId !== id);
+    data.works = data.works.filter((work) => work.franchiseId !== id);
+    data.seasons = data.seasons.filter((season) => !workIds.has(season.workId));
+    data.episodes = data.episodes.filter((episode) => !seasonIds.has(episode.seasonId));
+    data.libraryEntries = data.libraryEntries.filter((entry) => entry.franchiseId !== id);
+    data.episodeProgress = data.episodeProgress.filter((row) => !episodeIds.has(row.episodeId));
+    this.adminLog(data, actorId, "Elimina franchise", id);
+    await this.write(data);
+  }
+
+  async deleteWork(id: string, actorId: string) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const work = data.works.find((item) => item.id === id);
+    if (!work) {
+      throw new Error("Work non trovato.");
+    }
+    const seasonIds = new Set(data.seasons.filter((season) => season.workId === id).map((season) => season.id));
+    const episodeIds = new Set(data.episodes.filter((episode) => seasonIds.has(episode.seasonId)).map((episode) => episode.id));
+    data.works = data.works.filter((item) => item.id !== id);
+    data.seasons = data.seasons.filter((season) => season.workId !== id);
+    data.episodes = data.episodes.filter((episode) => !seasonIds.has(episode.seasonId));
+    data.episodeProgress = data.episodeProgress.filter((row) => !episodeIds.has(row.episodeId));
+    this.adminLog(data, actorId, "Elimina work", work.franchiseId, { workId: id });
+    await this.write(data);
+  }
+
+  async deleteSeason(id: string, actorId: string) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const season = data.seasons.find((item) => item.id === id);
+    if (!season) {
+      throw new Error("Season non trovata.");
+    }
+    const work = data.works.find((item) => item.id === season.workId);
+    const episodeIds = new Set(data.episodes.filter((episode) => episode.seasonId === id).map((episode) => episode.id));
+    data.seasons = data.seasons.filter((item) => item.id !== id);
+    data.episodes = data.episodes.filter((episode) => episode.seasonId !== id);
+    data.episodeProgress = data.episodeProgress.filter((row) => !episodeIds.has(row.episodeId));
+    this.adminLog(data, actorId, "Elimina season", work?.franchiseId ?? id, { seasonId: id });
+    await this.write(data);
+  }
+
+  async deleteEpisode(id: string, actorId: string) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const episode = data.episodes.find((item) => item.id === id);
+    if (!episode) {
+      throw new Error("Episodio non trovato.");
+    }
+    data.episodes = data.episodes.filter((item) => item.id !== id);
+    data.episodeProgress = data.episodeProgress.filter((row) => row.episodeId !== id);
+    this.adminLog(data, actorId, "Elimina episodio", episode.seasonId, { episodeId: id });
+    await this.write(data);
+  }
+
   async getLibrary(userId: string) {
     const data = await this.read();
     return data.libraryEntries
@@ -751,6 +820,20 @@ export class FileStore implements FramoryStore {
     this.adminLog(data, actorId, "Aggiorna segnalazione", reportId, { status });
     await this.write(data);
     return report;
+  }
+
+  async getMaintenanceMode() {
+    const data = await this.read();
+    return data.settings.maintenanceMode;
+  }
+
+  async setMaintenanceMode(actorId: string, enabled: boolean) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    data.settings.maintenanceMode = enabled;
+    this.adminLog(data, actorId, "Aggiorna manutenzione", "platform", { enabled });
+    await this.write(data);
+    return enabled;
   }
 
   async getAdminSnapshot(): Promise<AdminSnapshot> {
