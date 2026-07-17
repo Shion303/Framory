@@ -405,6 +405,16 @@ export class PrismaStore implements FramoryStore {
     return { items, total, page, pageSize };
   }
 
+  async listAniListWorkIds(limit = 12) {
+    const rows = await (await this.db()).work.findMany({
+      where: { anilistId: { not: null } },
+      select: { anilistId: true },
+      orderBy: { createdAt: "asc" },
+      take: Math.max(1, limit)
+    });
+    return rows.map((row) => row.anilistId).filter((id): id is number => typeof id === "number");
+  }
+
   async getFranchiseBySlug(slug: string) {
     const row = await (await this.db()).franchise.findUnique({ where: { slug }, include: franchiseInclude });
     return row ? this.franchise(row) : null;

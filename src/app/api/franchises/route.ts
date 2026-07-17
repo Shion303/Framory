@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     let result = await store.listFranchises(filters);
     let autoImport = { attempted: false, imported: 0 };
 
-    if (result.total === 0) {
+    if (result.total === 0 || !filters.query) {
       autoImport = await ensureAniListCatalog(filters);
       if (autoImport.imported > 0) {
         result = await store.listFranchises(filters);

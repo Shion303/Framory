@@ -35,6 +35,8 @@ L'import automatico AniList e' attivo di default. Per spegnerlo in test o ambien
 FRAMORY_DISABLE_ANILIST_AUTO_IMPORT=1
 ```
 
+La riconciliazione delle relazioni AniList già presenti è throttled con `FRAMORY_ANILIST_RELATION_SYNC_INTERVAL_MS`.
+
 ## Controlli
 
 ```bash

@@ -334,6 +334,14 @@ export class FileStore implements FramoryStore {
     return { items: items.slice(start, start + pageSize), total, page, pageSize };
   }
 
+  async listAniListWorkIds(limit = 12) {
+    const data = await this.read();
+    const ids = data.works
+      .map((work) => work.anilistId)
+      .filter((id): id is number => typeof id === "number");
+    return Array.from(new Set(ids)).slice(0, Math.max(1, limit));
+  }
+
   async getFranchiseBySlug(slug: string) {
     const data = await this.read();
     const franchise = data.franchises.find((item) => item.slug === slug);

@@ -55,6 +55,7 @@ export type FramoryStore = {
   getUserBySessionToken(token: string): Promise<PublicUser | null>;
   deleteSession(token: string): Promise<void>;
   listFranchises(filters?: FranchiseFilters): Promise<{ items: Franchise[]; total: number; page: number; pageSize: number }>;
+  listAniListWorkIds(limit?: number): Promise<number[]>;
   getFranchiseBySlug(slug: string): Promise<Franchise | null>;
   getFranchiseById(id: string): Promise<Franchise | null>;
   getFranchiseByWorkAniListId(anilistId: number): Promise<Franchise | null>;
