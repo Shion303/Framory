@@ -40,11 +40,14 @@ import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate }
 import { getPrismaClient } from "@/server/prisma";
 import {
   ANILIST_COLLECTION_TITLE,
+  animeTitleKeysForCandidate,
+  animeTitleKeysForValues,
   anilistEpisodeCap,
   episodeDrafts,
   franchiseDescription,
   groupAniListCandidates,
-  seasonTitle
+  seasonTitle,
+  titleKeysOverlap
 } from "./anilist-import";
 import { franchiseMatchesQuery, paginateFranchises, sortFranchises } from "./search";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
@@ -512,13 +515,14 @@ export class PrismaStore implements FramoryStore {
     const cap = anilistEpisodeCap(options);
 
     for (const group of groupAniListCandidates(candidates)) {
-      let franchiseId = await this.findFranchiseIdByAniListIds(db, group.ids);
+      const titleKeys = group.candidates.flatMap((candidate) => animeTitleKeysForCandidate(candidate));
+      let franchiseId = (await this.findFranchiseIdByAniListIds(db, group.ids)) ?? (await this.findFranchiseIdByTitleKeys(db, titleKeys));
       if (!franchiseId) {
         franchiseId = await this.createAniListFranchise(db, group.primary);
       }
 
       const collectionId = await this.ensureAniListCollection(db, franchiseId);
-      await this.mergeAniListFranchises(db, franchiseId, group.ids, collectionId);
+      await this.mergeAniListFranchises(db, franchiseId, group.ids, collectionId, titleKeys);
 
       let sortOrder = await db.work.count({ where: { franchiseId } });
       for (const candidate of group.candidates) {
@@ -917,6 +921,17 @@ export class PrismaStore implements FramoryStore {
     return rows.sort((a, b) => a.franchise.createdAt.getTime() - b.franchise.createdAt.getTime())[0]?.franchiseId ?? null;
   }
 
+  private async findFranchiseIdByTitleKeys(db: DbClient, keys: string[]) {
+    if (!keys.length) {
+      return null;
+    }
+    const rows = await db.franchise.findMany({
+      include: { works: { select: { title: true, titleRomaji: true, titleEnglish: true, titleNative: true } } },
+      orderBy: { createdAt: "asc" }
+    });
+    return rows.find((row) => titleKeysOverlap(keys, this.titleKeysForFranchiseRow(row)))?.id ?? null;
+  }
+
   private async createAniListFranchise(db: DbClient, candidate: AniListImportCandidate) {
     const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
     let slug = baseSlug;
@@ -959,7 +974,7 @@ export class PrismaStore implements FramoryStore {
     return row.id;
   }
 
-  private async mergeAniListFranchises(db: DbClient, targetFranchiseId: string, ids: number[], collectionId: string) {
+  private async mergeAniListFranchises(db: DbClient, targetFranchiseId: string, ids: number[], collectionId: string, titleKeys: string[]) {
     await db.work.updateMany({
       where: { franchiseId: targetFranchiseId, anilistId: { in: ids } },
       data: { collectionId }
@@ -969,12 +984,22 @@ export class PrismaStore implements FramoryStore {
       where: { franchiseId: { not: targetFranchiseId }, anilistId: { in: ids } },
       select: { franchiseId: true }
     });
-    const duplicateFranchiseIds = Array.from(new Set(duplicates.map((work) => work.franchiseId)));
-    if (!duplicateFranchiseIds.length) {
+    const duplicateFranchiseIds = new Set(duplicates.map((work) => work.franchiseId));
+    const titleMatches = await db.franchise.findMany({
+      where: { id: { not: targetFranchiseId } },
+      include: { works: { select: { title: true, titleRomaji: true, titleEnglish: true, titleNative: true } } }
+    });
+    for (const row of titleMatches) {
+      if (titleKeysOverlap(titleKeys, this.titleKeysForFranchiseRow(row))) {
+        duplicateFranchiseIds.add(row.id);
+      }
+    }
+    const duplicateIds = Array.from(duplicateFranchiseIds);
+    if (!duplicateIds.length) {
       return;
     }
 
-    const libraryEntries = await db.libraryEntry.findMany({ where: { franchiseId: { in: duplicateFranchiseIds } } });
+    const libraryEntries = await db.libraryEntry.findMany({ where: { franchiseId: { in: duplicateIds } } });
     for (const entry of libraryEntries) {
       const existing = await db.libraryEntry.findUnique({
         where: { userId_franchiseId: { userId: entry.userId, franchiseId: targetFranchiseId } }
@@ -987,10 +1012,20 @@ export class PrismaStore implements FramoryStore {
     }
 
     await db.work.updateMany({
-      where: { franchiseId: { in: duplicateFranchiseIds } },
+      where: { franchiseId: { in: duplicateIds } },
       data: { franchiseId: targetFranchiseId, collectionId }
     });
-    await db.franchise.deleteMany({ where: { id: { in: duplicateFranchiseIds } } });
+    await db.franchise.deleteMany({ where: { id: { in: duplicateIds } } });
+  }
+
+  private titleKeysForFranchiseRow(row: {
+    title: string;
+    works: Array<{ title: string; titleRomaji: string | null; titleEnglish: string | null; titleNative: string | null }>;
+  }) {
+    return animeTitleKeysForValues([
+      row.title,
+      ...row.works.flatMap((work) => [work.title, work.titleRomaji, work.titleEnglish, work.titleNative])
+    ]);
   }
 
   private async addAniListWork(

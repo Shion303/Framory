@@ -21,11 +21,14 @@ import { calculateProgress } from "@/server/progress";
 import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
 import {
   ANILIST_COLLECTION_TITLE,
+  animeTitleKeysForCandidate,
+  animeTitleKeysForValues,
   anilistEpisodeCap,
   episodeDrafts,
   franchiseDescription,
   groupAniListCandidates,
-  seasonTitle
+  seasonTitle,
+  titleKeysOverlap
 } from "./anilist-import";
 import { franchiseMatchesQuery, paginateFranchises, sortFranchises } from "./search";
 import type { AdminSnapshot, CreateUserInput, FramoryStore, SessionResult, UserWithPassword } from "./types";
@@ -442,14 +445,15 @@ export class FileStore implements FramoryStore {
 
     for (const group of groupAniListCandidates(candidates)) {
       const now = nowIso();
-      let franchiseId = this.findFranchiseIdByAniListIds(data, group.ids);
+      const titleKeys = group.candidates.flatMap((candidate) => animeTitleKeysForCandidate(candidate));
+      let franchiseId = this.findFranchiseIdByAniListIds(data, group.ids) ?? this.findFranchiseIdByTitleKeys(data, titleKeys);
 
       if (!franchiseId) {
         franchiseId = this.createAniListFranchise(data, group.primary, now);
       }
 
       const collectionId = this.ensureAniListCollection(data, franchiseId, now);
-      this.mergeAniListFranchises(data, franchiseId, group.ids, collectionId);
+      this.mergeAniListFranchises(data, franchiseId, group.ids, collectionId, titleKeys);
 
       let sortOrder = data.works.filter((work) => work.franchiseId === franchiseId).length;
       for (const candidate of group.candidates) {
@@ -973,6 +977,15 @@ export class FileStore implements FramoryStore {
     })[0].franchiseId;
   }
 
+  private findFranchiseIdByTitleKeys(data: DataFile, keys: string[]) {
+    if (!keys.length) {
+      return null;
+    }
+    return data.franchises
+      .filter((franchise) => titleKeysOverlap(keys, this.titleKeysForFranchise(data, franchise.id)))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]?.id ?? null;
+  }
+
   private createAniListFranchise(data: DataFile, candidate: AniListImportCandidate, now: string) {
     const baseSlug = slugify(candidate.title) || `anilist-${candidate.anilistId}`;
     let slug = baseSlug;
@@ -1017,13 +1030,18 @@ export class FileStore implements FramoryStore {
     return collectionId;
   }
 
-  private mergeAniListFranchises(data: DataFile, targetFranchiseId: string, ids: number[], collectionId: string) {
+  private mergeAniListFranchises(data: DataFile, targetFranchiseId: string, ids: number[], collectionId: string, titleKeys: string[]) {
     const idSet = new Set(ids);
     const duplicateFranchiseIds = new Set(
       data.works
         .filter((work) => work.franchiseId !== targetFranchiseId && typeof work.anilistId === "number" && idSet.has(work.anilistId))
         .map((work) => work.franchiseId)
     );
+    for (const franchise of data.franchises) {
+      if (franchise.id !== targetFranchiseId && titleKeysOverlap(titleKeys, this.titleKeysForFranchise(data, franchise.id))) {
+        duplicateFranchiseIds.add(franchise.id);
+      }
+    }
 
     for (const work of data.works) {
       if (work.franchiseId === targetFranchiseId && typeof work.anilistId === "number" && idSet.has(work.anilistId)) {
@@ -1056,6 +1074,15 @@ export class FileStore implements FramoryStore {
     data.libraryEntries = data.libraryEntries.filter((entry) => !libraryEntryIdsToRemove.has(entry.id));
     data.collections = data.collections.filter((collection) => !duplicateFranchiseIds.has(collection.franchiseId));
     data.franchises = data.franchises.filter((franchise) => !duplicateFranchiseIds.has(franchise.id));
+  }
+
+  private titleKeysForFranchise(data: DataFile, franchiseId: string) {
+    const franchise = data.franchises.find((item) => item.id === franchiseId);
+    const works = data.works.filter((work) => work.franchiseId === franchiseId);
+    return animeTitleKeysForValues([
+      franchise?.title,
+      ...works.flatMap((work) => [work.title, work.titleRomaji, work.titleEnglish, work.titleNative])
+    ]);
   }
 
   private addAniListWork(

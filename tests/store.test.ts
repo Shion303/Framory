@@ -171,7 +171,7 @@ describe("FileStore", () => {
     await expect(store.listFranchises({ query: "Delicious" })).resolves.toMatchObject({ total: 1 });
   });
 
-  it("fonde franchise AniList gia separati quando scopre relazioni", async () => {
+  it("fonde franchise AniList compatibili per titolo e relazioni", async () => {
     const store = await freshStore();
     const first: AniListImportCandidate = {
       anilistId: 1,
@@ -210,7 +210,7 @@ describe("FileStore", () => {
 
     await store.autoImportAniListFranchises([first]);
     await store.autoImportAniListFranchises([second]);
-    await expect(store.listFranchises()).resolves.toMatchObject({ total: 2 });
+    await expect(store.listFranchises()).resolves.toMatchObject({ total: 1 });
 
     const merged = await store.autoImportAniListFranchises([{ ...first, relationIds: [second.anilistId], relatedMedia: [second] }]);
     expect(merged).toHaveLength(1);
@@ -258,7 +258,7 @@ describe("FileStore", () => {
 
     await store.autoImportAniListFranchises([first]);
     await store.autoImportAniListFranchises([second]);
-    await expect(store.listFranchises({ query: "DR.STONE" })).resolves.toMatchObject({ total: 2 });
+    await expect(store.listFranchises({ query: "DR.STONE" })).resolves.toMatchObject({ total: 1 });
 
     await store.autoImportAniListFranchises([{ ...first, relationIds: [second.anilistId], relatedMedia: [second] }]);
     const result = await store.listFranchises({ query: "DR.STONE" });

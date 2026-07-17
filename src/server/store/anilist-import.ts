@@ -59,6 +59,7 @@ export function groupAniListCandidates(candidates: AniListImportCandidate[]): An
   const nodes = flattenAniListCandidates(candidates);
   const knownIds = new Set(nodes.map((candidate) => candidate.anilistId));
   const parent = new Map<number, number>();
+  const keyOwners = new Map<string, number>();
 
   const ensure = (id: number) => {
     if (!parent.has(id)) {
@@ -85,6 +86,19 @@ export function groupAniListCandidates(candidates: AniListImportCandidate[]): An
 
   for (const candidate of nodes) {
     ensure(candidate.anilistId);
+    for (const key of animeTitleKeysForCandidate(candidate)) {
+      const owner = keyOwners.get(key);
+      if (owner) {
+        union(candidate.anilistId, owner);
+      } else {
+        keyOwners.set(key, candidate.anilistId);
+      }
+      for (const [existingKey, existingOwner] of keyOwners.entries()) {
+        if (keysAreCompatible(key, existingKey)) {
+          union(candidate.anilistId, existingOwner);
+        }
+      }
+    }
     for (const id of candidate.relationIds ?? []) {
       ensure(id);
       union(candidate.anilistId, id);
@@ -131,6 +145,58 @@ function sortCandidates(candidates: AniListImportCandidate[]) {
     }
     return a.title.localeCompare(b.title, "it");
   });
+}
+
+export function animeTitleKeysForCandidate(candidate: AniListImportCandidate) {
+  return animeTitleKeysForValues([candidate.title, candidate.titleRomaji, candidate.titleEnglish, candidate.titleNative]);
+}
+
+export function animeTitleKeysForValues(values: Array<string | null | undefined>) {
+  const keys = new Set<string>();
+  for (const value of values) {
+    const root = titleRoot(value ?? "");
+    const normalizedRoot = normalizeTitle(root);
+    const normalizedFull = normalizeTitle(value ?? "");
+    if (normalizedRoot.length >= 4) {
+      keys.add(normalizedRoot);
+    }
+    if (normalizedFull.length >= 4) {
+      keys.add(normalizedFull);
+    }
+  }
+  return Array.from(keys);
+}
+
+export function titleKeysOverlap(first: string[], second: string[]) {
+  return first.some((left) => second.some((right) => keysAreCompatible(left, right)));
+}
+
+function titleRoot(value: string) {
+  return value
+    .replace(/\([^)]*\)/g, " ")
+    .split(/\s*[:：]\s*/)[0]
+    .replace(/\b(?:season|stagione|cour|part|parte)\s*\d+.*$/i, "")
+    .replace(/\b(?:season|stagione)\s+(?:one|two|three|four|five).*$/i, "")
+    .replace(/\b(?:final season|the final season).*$/i, "")
+    .trim();
+}
+
+function normalizeTitle(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function keysAreCompatible(first: string, second: string) {
+  if (first === second) {
+    return true;
+  }
+  const shorter = first.length <= second.length ? first : second;
+  const longer = first.length > second.length ? first : second;
+  return shorter.length >= 6 && longer.startsWith(shorter);
 }
 
 function formatRank(format: AniListImportCandidate["format"]) {
