@@ -126,26 +126,39 @@ export function FranchiseClient({ slug }: { slug: string }) {
       <section className="space-y-4">
         <h2 className="text-2xl font-black">Struttura del franchise</h2>
         {groupedWorks.length ? (
-          groupedWorks.map((group) => (
-            <div className="space-y-3" key={group.id}>
+          <article className="card p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-xl font-black text-zinc-50">{group.title}</h3>
-                {group.description ? <p className="mt-1 text-sm text-zinc-400">{group.description}</p> : null}
+                <h3 className="text-2xl font-black text-zinc-50">{franchise.title}</h3>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {franchise.works.length} opere collegate, {countEpisodes(franchise.works)} episodi tracciabili
+                </p>
               </div>
-              <div className="space-y-4">
-                {group.works.map((work) => (
-                  <WorkArticle
-                    completedIds={completedIds}
-                    completedOverrides={completedOverrides}
-                    key={work.id}
-                    library={library}
-                    onToggleEpisode={toggleEpisode}
-                    work={work}
-                  />
-                ))}
-              </div>
+              <span className="rounded-md bg-zinc-950 px-3 py-2 text-sm text-zinc-300">{labels.animeStatus[franchise.status]}</span>
             </div>
-          ))
+            <div className="mt-5 space-y-5">
+              {groupedWorks.map((group) => (
+                <div className="space-y-3" key={group.id}>
+                  <div className="border-b border-zinc-800 pb-2">
+                    <h4 className="font-black text-zinc-50">{group.title}</h4>
+                    {group.description ? <p className="mt-1 text-sm text-zinc-400">{group.description}</p> : null}
+                  </div>
+                  <div className="space-y-3">
+                    {group.works.map((work) => (
+                      <WorkBlock
+                        completedIds={completedIds}
+                        completedOverrides={completedOverrides}
+                        key={work.id}
+                        library={library}
+                        onToggleEpisode={toggleEpisode}
+                        work={work}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
         ) : (
           <p className="card p-5 text-zinc-400">Nessuna opera registrata.</p>
         )}
@@ -159,7 +172,7 @@ export function FranchiseClient({ slug }: { slug: string }) {
   );
 }
 
-function WorkArticle({
+function WorkBlock({
   work,
   library,
   completedIds,
@@ -173,19 +186,19 @@ function WorkArticle({
   onToggleEpisode: (episodeId: string, completed: boolean) => void;
 }) {
   return (
-    <article className="card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="rounded-md border border-zinc-800 bg-zinc-950 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-800 pb-3">
         <div>
           <p className="text-sm font-bold uppercase text-violet-300">{labels.workFormat[work.format]}</p>
-          <h4 className="text-2xl font-black">{work.title}</h4>
+          <h5 className="text-xl font-black">{work.title}</h5>
         </div>
-        <span className="rounded-md bg-zinc-950 px-3 py-2 text-sm text-zinc-300">{labels.animeStatus[work.status]}</span>
+        <span className="rounded-md bg-black px-3 py-2 text-sm text-zinc-300">{labels.animeStatus[work.status]}</span>
       </div>
-      <div className="mt-4 space-y-4">
+      <div className="mt-3 space-y-3">
         {work.seasons.length ? (
           work.seasons.map((season) => (
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4" key={season.id}>
-              <h5 className="font-bold">{season.title}</h5>
+            <div key={season.id}>
+              <p className="font-bold text-zinc-100">{season.title}</p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {season.episodes.length ? (
                   season.episodes.map((episode) => {
@@ -216,6 +229,13 @@ function WorkArticle({
           <p className="text-zinc-400">Nessuna stagione registrata.</p>
         )}
       </div>
-    </article>
+    </div>
+  );
+}
+
+function countEpisodes(works: Work[]) {
+  return works.reduce(
+    (total, work) => total + work.seasons.reduce((seasonTotal, season) => seasonTotal + season.episodes.length, 0),
+    0
   );
 }

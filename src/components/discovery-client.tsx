@@ -118,6 +118,10 @@ export function DiscoveryClient() {
                 </Link>
                 <p className="line-clamp-3 text-sm text-zinc-400">{franchise.description}</p>
                 <p className="text-sm text-violet-200">{franchise.genres.slice(0, 4).join(", ") || "Anime"}</p>
+                <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3 text-sm text-zinc-300">
+                  <p className="font-bold text-zinc-100">{franchise.works.length || 1} opere nella stessa card</p>
+                  {franchise.works.length ? <p className="mt-1 line-clamp-2">{franchise.works.slice(0, 4).map((work) => work.title).join(", ")}</p> : null}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <Link className="btn btn-ghost" href={`/franchise/${franchise.slug}`}>
                     Apri
