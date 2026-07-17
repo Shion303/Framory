@@ -1,0 +1,60 @@
+{
+  "name": "framory",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "prisma:format": "prisma format",
+    "prisma:validate": "prisma validate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:status": "prisma migrate status",
+    "prisma:studio": "prisma studio",
+    "seed": "tsx prisma/seed.ts",
+    "test": "vitest run",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "check": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@prisma/client": "7.8.0",
+    "@prisma/adapter-pg": "7.8.0",
+    "bcryptjs": "^3.0.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.561.0",
+    "next": "16.2.10",
+    "pg": "8.22.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "zod": "^4.1.13"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.13",
+    "postcss": "8.5.19"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/pg": "^8.15.6",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript-eslint": "^8.50.0",
+    "eslint": "^9.39.1",
+    "eslint-config-next": "16.2.10",
+    "postcss": "8.5.19",
+    "prisma": "7.8.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

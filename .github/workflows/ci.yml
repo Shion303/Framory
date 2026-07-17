@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["codex/**", "main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/framory?schema=public
+      FRAMORY_STORAGE: file
+      FRAMORY_SESSION_SECRET: ci-session-secret-change-me
+      FRAMORY_OWNER_EMAIL: owner@framory.test
+      FRAMORY_OWNER_USERNAME: owner
+      FRAMORY_OWNER_PASSWORD: OwnerPassword123!
+      FRAMORY_OWNER_DISPLAY_NAME: Owner Framory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:validate
+      - run: npm run prisma:generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build

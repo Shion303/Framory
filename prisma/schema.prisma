@@ -1,0 +1,323 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MODERATOR
+  USER
+}
+
+enum LibraryState {
+  PLANNED
+  WATCHING
+  COMPLETED
+  PAUSED
+  DROPPED
+}
+
+enum AnimeStatus {
+  ANNOUNCED
+  RELEASING
+  FINISHED
+  HIATUS
+}
+
+enum WorkFormat {
+  TV
+  MOVIE
+  OVA
+  ONA
+  SPECIAL
+}
+
+enum PrivacyLevel {
+  PUBLIC
+  FOLLOWERS
+  PRIVATE
+}
+
+enum BadgeRarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+enum BadgeCategory {
+  TRACKING
+  COLLECTION
+  COMMUNITY
+  ADMIN
+}
+
+enum BadgeConditionKind {
+  EPISODES_WATCHED
+  FRANCHISES_COMPLETED
+  MANUAL
+  ADMIN_CREATED
+}
+
+enum ActivityKind {
+  REGISTERED
+  LIBRARY_ADDED
+  EPISODE_WATCHED
+  BADGE_UNLOCKED
+  BADGE_EQUIPPED
+  ADMIN_ACTION
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id               String            @id @default(cuid())
+  email            String            @unique
+  username         String            @unique
+  displayName      String
+  passwordHash     String
+  role             Role              @default(USER)
+  isActive         Boolean           @default(true)
+  avatarUrl        String?
+  bannerUrl        String?
+  bio              String?
+  profilePrivacy   PrivacyLevel      @default(PUBLIC)
+  libraryPrivacy   PrivacyLevel      @default(PUBLIC)
+  progressPrivacy  PrivacyLevel      @default(PUBLIC)
+  activityPrivacy  PrivacyLevel      @default(PUBLIC)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sessions         Session[]
+  libraryEntries   LibraryEntry[]
+  episodeProgress  EpisodeProgress[]
+  badges           UserBadge[]
+  activities       Activity[]
+  reports          Report[]          @relation("ReporterReports")
+  moderatedReports Report[]          @relation("ModeratorReports")
+  adminLogs        AdminLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  expiresAt DateTime
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Franchise {
+  id                   String         @id @default(cuid())
+  slug                 String         @unique
+  title                String
+  description          String
+  coverImage           String?
+  bannerImage          String?
+  genres               String[]
+  startYear            Int?
+  status               AnimeStatus    @default(ANNOUNCED)
+  isCompleteAdaptation Boolean        @default(false)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  collections          Collection[]
+  works                Work[]
+  libraryEntries       LibraryEntry[]
+
+  @@index([title])
+  @@index([startYear])
+  @@index([status])
+}
+
+model Collection {
+  id          String    @id @default(cuid())
+  franchiseId String
+  franchise   Franchise @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  works       Work[]
+
+  @@index([franchiseId, sortOrder])
+}
+
+model Work {
+  id           String      @id @default(cuid())
+  franchiseId  String
+  collectionId String?
+  franchise    Franchise   @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  title        String
+  titleRomaji  String?
+  titleEnglish String?
+  titleNative  String?
+  description  String?
+  coverImage   String?
+  bannerImage  String?
+  genres       String[]
+  startYear    Int?
+  format       WorkFormat  @default(TV)
+  status       AnimeStatus @default(ANNOUNCED)
+  duration     Int?
+  episodeCount Int?
+  anilistId    Int?        @unique
+  malId        Int?
+  sortOrder    Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  seasons      Season[]
+
+  @@index([franchiseId, sortOrder])
+  @@index([collectionId])
+  @@index([anilistId])
+}
+
+model Season {
+  id           String    @id @default(cuid())
+  workId       String
+  work         Work      @relation(fields: [workId], references: [id], onDelete: Cascade)
+  title        String
+  sortOrder    Int       @default(0)
+  episodeCount Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  episodes     Episode[]
+
+  @@index([workId, sortOrder])
+}
+
+model Episode {
+  id        String            @id @default(cuid())
+  seasonId  String
+  season    Season            @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  title     String
+  number    Int
+  duration  Int?
+  airedAt   DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  progress  EpisodeProgress[]
+
+  @@unique([seasonId, number])
+  @@index([seasonId, number])
+}
+
+model LibraryEntry {
+  id          String       @id @default(cuid())
+  userId      String
+  franchiseId String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  franchise   Franchise    @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  state       LibraryState @default(PLANNED)
+  score       Int?
+  favorite    Boolean      @default(false)
+  notes       String?
+  addedAt     DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([userId, franchiseId])
+  @@index([userId, state])
+}
+
+model EpisodeProgress {
+  id        String    @id @default(cuid())
+  userId    String
+  episodeId String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode   Episode   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  completed Boolean   @default(false)
+  watchedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([userId, episodeId])
+  @@index([userId, completed])
+}
+
+model Badge {
+  id             String             @id @default(cuid())
+  slug           String             @unique
+  name           String
+  description    String
+  rarity         BadgeRarity        @default(COMMON)
+  category       BadgeCategory      @default(TRACKING)
+  conditionKind  BadgeConditionKind @default(MANUAL)
+  conditionValue Int?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  users          UserBadge[]
+}
+
+model UserBadge {
+  id           String   @id @default(cuid())
+  userId       String
+  badgeId      String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge        Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  unlockedAt   DateTime @default(now())
+  assignedBy   String?
+  equippedSlot Int?
+
+  @@unique([userId, badgeId])
+  @@unique([userId, equippedSlot])
+  @@index([userId])
+}
+
+model Activity {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      ActivityKind
+  message   String
+  metadata  Json?
+  createdAt DateTime     @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Report {
+  id          String       @id @default(cuid())
+  reporterId  String
+  reporter    User         @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetType  String
+  targetId    String
+  reason      String
+  status      ReportStatus @default(OPEN)
+  moderatorId String?
+  moderator   User?        @relation("ModeratorReports", fields: [moderatorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([status])
+}
+
+model AdminLog {
+  id        String   @id @default(cuid())
+  actorId   String
+  actor     User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  action    String
+  target    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+}
+
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
