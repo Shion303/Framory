@@ -51,12 +51,12 @@ export function BadgeClient() {
           return (
             <article className="card p-5" key={badge.id}>
               <div className="flex items-start gap-3">
-                <span className="rounded-md bg-violet-950 p-2 text-violet-100">
-                  <Award size={22} />
-                </span>
+                <BadgeVisual badge={badge} />
                 <div>
                   <h2 className="text-xl font-black">{badge.name}</h2>
-                  <p className="text-sm text-violet-200">{labels.rarity[badge.rarity]}</p>
+                  <p className="text-sm text-violet-200">
+                    {labels.rarity[badge.rarity]}{badge.ownerOnly ? " - Solo owner" : ""}
+                  </p>
                 </div>
               </div>
               <p className="mt-4 text-sm text-zinc-400">{badge.description}</p>
@@ -75,5 +75,19 @@ export function BadgeClient() {
         })}
       </section>
     </div>
+  );
+}
+
+function BadgeVisual({ badge }: { badge: Badge }) {
+  if (badge.imageUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img alt="" className="size-10 rounded-md object-cover" src={badge.imageUrl} />
+    );
+  }
+  return (
+    <span className="rounded-md bg-violet-950 p-2 text-violet-100">
+      <Award size={22} />
+    </span>
   );
 }

@@ -4,6 +4,14 @@ test.beforeEach(async ({ request }) => {
   await request.post("/api/test/reset");
 });
 
+test("app usa Luckiest Guy", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveCSS("font-family", /Luckiest Guy/);
+  const brand = page.getByRole("link", { name: "Framory" });
+  await expect(brand).toBeVisible();
+  await expect(brand).toHaveCSS("font-family", /Luckiest Guy/);
+});
+
 test("flusso principale Framory 1.0", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").fill("owner@framory.test");
@@ -131,4 +139,46 @@ test("autorizzazioni admin e account disattivato", async ({ page }) => {
   await page.getByLabel("Password").fill("PasswordSicura123!");
   await page.getByRole("button", { name: /Entra/ }).click();
   await expect(page.getByText("Account disattivato.")).toBeVisible();
+});
+
+test("pannello admin semplificato e badge custom", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill("owner@framory.test");
+  await page.getByLabel("Password").fill("OwnerPassword123!");
+  await page.getByRole("button", { name: /Entra/ }).click();
+  await expect(page.getByText("Bentornato, Owner Framory")).toBeVisible();
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "Import AniList" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Crea badge" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Crea Franchise" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Crea Work" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Crea Season" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Crea Episode" })).toHaveCount(0);
+
+  const createPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Crea badge" }) });
+  await createPanel.getByPlaceholder("Nome badge").fill("Badge UI");
+  await createPanel.getByPlaceholder("slug-badge").fill("badge-ui");
+  await createPanel.getByPlaceholder("URL immagine badge").fill("https://example.com/badge-ui.png");
+  await createPanel.getByPlaceholder("Descrizione").fill("Badge creato dal pannello admin.");
+  await createPanel.locator('select[name="rarity"]').selectOption("epico");
+  await createPanel.locator('select[name="category"]').selectOption("community");
+  await createPanel.locator('select[name="conditionKind"]').selectOption("manual");
+  await createPanel.getByRole("button", { name: /Crea badge/ }).click();
+  await expect(page.locator("main").getByText("Badge creato.", { exact: true })).toBeVisible();
+
+  const editor = page.getByRole("form", { name: "Editor badge badge-ui" });
+  await expect(editor).toBeVisible();
+  await editor.getByLabel("Nome badge").fill("Badge UI Editato");
+  await editor.getByLabel("URL immagine badge").fill("https://example.com/badge-ui-editato.png");
+  await editor.getByLabel("Solo owner").check();
+  await editor.getByRole("button", { name: /Salva/ }).click();
+  await expect(page.locator("main").getByText("Badge aggiornato.", { exact: true })).toBeVisible();
+  await expect(editor.getByLabel("Nome badge")).toHaveValue("Badge UI Editato");
+  await expect(editor.getByLabel("URL immagine badge")).toHaveValue("https://example.com/badge-ui-editato.png");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: /Elimina/ }).click();
+  await expect(page.locator("main").getByText("Badge eliminato.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("form", { name: "Editor badge badge-ui" })).toHaveCount(0);
 });

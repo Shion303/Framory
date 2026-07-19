@@ -252,10 +252,12 @@ model Badge {
   slug           String             @unique
   name           String
   description    String
+  imageUrl       String?
   rarity         BadgeRarity        @default(COMMON)
   category       BadgeCategory      @default(TRACKING)
   conditionKind  BadgeConditionKind @default(MANUAL)
   conditionValue Int?
+  ownerOnly      Boolean            @default(false)
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   users          UserBadge[]

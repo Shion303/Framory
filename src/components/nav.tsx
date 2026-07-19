@@ -25,7 +25,7 @@ export function Nav() {
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-800 bg-black/82 backdrop-blur">
       <nav className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        <Link className="text-xl font-black text-zinc-50" href="/">
+        <Link className="brand-title text-2xl text-zinc-50" href="/">
           Framory
         </Link>
         <div className="flex flex-wrap items-center gap-2 text-sm">

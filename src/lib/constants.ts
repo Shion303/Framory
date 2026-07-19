@@ -1,4 +1,4 @@
-import type { AnimeStatus, BadgeCategory, BadgeRarity, LibraryState, PrivacyLevel, Role, WorkFormat } from "./types";
+import type { AnimeStatus, BadgeCategory, BadgeConditionKind, BadgeRarity, LibraryState, PrivacyLevel, Role, WorkFormat } from "./types";
 
 export const roles: Role[] = ["owner", "admin", "moderator", "user"];
 export const adminRoles: Role[] = ["owner", "admin"];
@@ -9,6 +9,7 @@ export const workFormats: WorkFormat[] = ["tv", "film", "ova", "ona", "special"]
 export const privacyLevels: PrivacyLevel[] = ["pubblico", "follower", "privato"];
 export const badgeRarities: BadgeRarity[] = ["comune", "raro", "epico", "leggendario"];
 export const badgeCategories: BadgeCategory[] = ["tracking", "collezione", "community", "admin"];
+export const badgeConditionKinds: BadgeConditionKind[] = ["episodes_watched", "franchises_completed", "manual", "admin_created"];
 
 export const SESSION_COOKIE = "framory_session";
 
@@ -49,5 +50,17 @@ export const labels = {
     raro: "Raro",
     epico: "Epico",
     leggendario: "Leggendario"
+  },
+  badgeCategory: {
+    tracking: "Tracking",
+    collezione: "Collezione",
+    community: "Community",
+    admin: "Admin"
+  },
+  badgeCondition: {
+    episodes_watched: "Episodi visti",
+    franchises_completed: "Franchise completati",
+    manual: "Manuale",
+    admin_created: "Creato da admin"
   }
 } as const;

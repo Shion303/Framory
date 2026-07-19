@@ -12,6 +12,8 @@ import type {
 } from "@/lib/types";
 import type {
   collectionSchema,
+  badgeSchema,
+  badgeUpdateSchema,
   episodeSchema,
   franchiseSchema,
   libraryUpdateSchema,
@@ -78,6 +80,9 @@ export type FramoryStore = {
   toggleEpisode(userId: string, episodeId: string, completed: boolean): Promise<LibraryEntry>;
   getHome(userId?: string | null): Promise<HomePayload>;
   listBadges(userId?: string): Promise<{ badges: Badge[]; userBadges: UserBadge[] }>;
+  createBadge(actorId: string, input: z.infer<typeof badgeSchema>): Promise<Badge>;
+  updateBadge(actorId: string, badgeId: string, input: z.infer<typeof badgeUpdateSchema>): Promise<Badge>;
+  deleteBadge(actorId: string, badgeId: string): Promise<void>;
   equipBadge(userId: string, badgeId: string, slot: number): Promise<UserBadge[]>;
   grantBadge(actorId: string, userId: string, badgeId: string): Promise<UserBadge>;
   updateProfile(userId: string, input: z.infer<typeof profileUpdateSchema>): Promise<PublicUser>;

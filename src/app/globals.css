@@ -1,9 +1,21 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Luckiest Guy";
+  src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
 :root {
   color-scheme: dark;
   background: #050505;
   color: #f4f4f5;
+}
+
+html {
+  font-size: 15px;
 }
 
 * {
@@ -17,7 +29,11 @@ body {
     radial-gradient(circle at top left, rgba(124, 58, 237, 0.16), transparent 28rem),
     linear-gradient(180deg, #050505 0%, #09090b 48%, #111113 100%);
   color: #f4f4f5;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Luckiest Guy", Arial, Helvetica, sans-serif;
+  font-synthesis-weight: none;
+  font-weight: 400;
+  line-height: 1.42;
+  text-rendering: geometricPrecision;
 }
 
 a {
@@ -30,6 +46,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-weight: 400;
 }
 
 :focus-visible {
@@ -48,8 +65,11 @@ textarea {
   border-radius: 0.5rem;
   border: 1px solid rgb(63 63 70);
   background: rgb(9 9 11);
-  padding: 0.75rem 0.9rem;
+  padding: 0.65rem 0.8rem;
   color: rgb(244 244 245);
+  font-size: 0.92rem;
+  font-weight: 400;
+  line-height: 1.2;
 }
 
 .control::placeholder {
@@ -58,14 +78,16 @@ textarea {
 
 .btn {
   display: inline-flex;
-  min-height: 2.5rem;
+  min-height: 2.35rem;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(82 82 91);
-  padding: 0.6rem 0.9rem;
-  font-weight: 700;
+  padding: 0.52rem 0.78rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1;
   transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
 
@@ -89,4 +111,51 @@ textarea {
   border-radius: 0.5rem;
   border: 1px solid rgb(63 63 70);
   background: rgba(24, 24, 27, 0.86);
+}
+
+.brand-title {
+  font-family: "Luckiest Guy", Arial, Helvetica, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.font-bold,
+.font-black {
+  font-weight: 400;
+}
+
+.text-5xl {
+  font-size: 2.8rem;
+  line-height: 1.05;
+}
+
+.text-4xl {
+  font-size: 2.2rem;
+  line-height: 1.08;
+}
+
+.text-3xl {
+  font-size: 1.72rem;
+  line-height: 1.12;
+}
+
+.text-2xl {
+  font-size: 1.38rem;
+  line-height: 1.16;
+}
+
+.text-xl {
+  font-size: 1.12rem;
+  line-height: 1.22;
+}
+
+.text-lg {
+  font-size: 1rem;
+  line-height: 1.28;
+}
+
+.text-sm {
+  font-size: 0.86rem;
+  line-height: 1.24;
 }

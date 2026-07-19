@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Award } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Activity, LibraryEntry, PublicUser, UserBadge } from "@/lib/types";
 import { labels } from "@/lib/constants";
@@ -45,7 +46,8 @@ export function ProfileClient({ username }: { username: string }) {
           {profile.user.bio ? <p className="mt-4 max-w-3xl text-zinc-300">{profile.user.bio}</p> : null}
           <div className="mt-5 flex flex-wrap gap-2">
             {equipped.map((userBadge) => (
-              <span className="rounded-md bg-violet-950 px-3 py-2 text-sm text-violet-100" key={userBadge.id}>
+              <span className="inline-flex items-center gap-2 rounded-md bg-violet-950 px-3 py-2 text-sm text-violet-100" key={userBadge.id}>
+                <ProfileBadgeVisual userBadge={userBadge} />
                 {userBadge.badge.name}
               </span>
             ))}
@@ -84,4 +86,14 @@ export function ProfileClient({ username }: { username: string }) {
       </section>
     </div>
   );
+}
+
+function ProfileBadgeVisual({ userBadge }: { userBadge: UserBadge }) {
+  if (userBadge.badge.imageUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img alt="" className="size-5 rounded object-cover" src={userBadge.badge.imageUrl} />
+    );
+  }
+  return <Award size={16} />;
 }

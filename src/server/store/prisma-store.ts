@@ -210,37 +210,45 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     slug: "primo-episodio",
     name: "Primo episodio",
     description: "Hai segnato il tuo primo episodio su Framory.",
+    imageUrl: null,
     rarity: "comune",
     category: "tracking",
     conditionKind: "episodes_watched",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   },
   {
     slug: "dieci-episodi",
     name: "Dieci episodi",
     description: "Hai completato dieci episodi.",
+    imageUrl: null,
     rarity: "raro",
     category: "tracking",
     conditionKind: "episodes_watched",
-    conditionValue: 10
+    conditionValue: 10,
+    ownerOnly: false
   },
   {
     slug: "franchise-completo",
     name: "Franchise completato",
     description: "Hai completato un intero franchise.",
+    imageUrl: null,
     rarity: "epico",
     category: "collezione",
     conditionKind: "franchises_completed",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   },
   {
     slug: "curatore",
     name: "Curatore",
     description: "Hai contribuito alla struttura del catalogo.",
+    imageUrl: null,
     rarity: "raro",
     category: "admin",
     conditionKind: "admin_created",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   }
 ];
 
@@ -266,10 +274,12 @@ export class PrismaStore implements FramoryStore {
           slug: badge.slug,
           name: badge.name,
           description: badge.description,
+          imageUrl: badge.imageUrl,
           rarity: rarityToDb[badge.rarity],
           category: categoryToDb[badge.category],
           conditionKind: conditionToDb[badge.conditionKind],
-          conditionValue: badge.conditionValue ?? null
+          conditionValue: badge.conditionValue ?? null,
+          ownerOnly: badge.ownerOnly
         }
       });
     }
@@ -748,6 +758,76 @@ export class PrismaStore implements FramoryStore {
       badges: badges.map((badge) => this.badge(badge)),
       userBadges: userBadges.map((badge) => this.userBadge(badge))
     };
+  }
+
+  async createBadge(actorId: string, input: Parameters<FramoryStore["createBadge"]>[1]) {
+    await this.assertAdmin(actorId);
+    const db = await this.db();
+    const existing = await db.badge.findUnique({ where: { slug: input.slug } });
+    if (existing) {
+      throw new Error("Esiste gia un badge con questo slug.");
+    }
+    const row = await db.badge.create({
+      data: {
+        slug: input.slug,
+        name: input.name,
+        description: input.description,
+        imageUrl: nullableUrl(input.imageUrl),
+        rarity: rarityToDb[input.rarity],
+        category: categoryToDb[input.category],
+        conditionKind: conditionToDb[input.conditionKind],
+        conditionValue: input.conditionValue ?? null,
+        ownerOnly: input.ownerOnly ?? false
+      }
+    });
+    await this.adminLog(actorId, "Crea badge", row.id, { slug: row.slug, name: row.name });
+    return this.badge(row);
+  }
+
+  async updateBadge(actorId: string, badgeId: string, input: Parameters<FramoryStore["updateBadge"]>[2]) {
+    await this.assertAdmin(actorId);
+    const db = await this.db();
+    const current = await db.badge.findUnique({ where: { id: badgeId } });
+    if (!current) {
+      throw new Error("Badge non trovato.");
+    }
+    if (input.slug) {
+      const existing = await db.badge.findUnique({ where: { slug: input.slug } });
+      if (existing && existing.id !== badgeId) {
+        throw new Error("Esiste gia un badge con questo slug.");
+      }
+    }
+    const row = await db.badge.update({
+      where: { id: badgeId },
+      data: {
+        ...(input.slug ? { slug: input.slug } : {}),
+        ...(input.name ? { name: input.name } : {}),
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.imageUrl !== undefined ? { imageUrl: nullableUrl(input.imageUrl) } : {}),
+        ...(input.rarity ? { rarity: rarityToDb[input.rarity] } : {}),
+        ...(input.category ? { category: categoryToDb[input.category] } : {}),
+        ...(input.conditionKind ? { conditionKind: conditionToDb[input.conditionKind] } : {}),
+        ...(input.conditionValue !== undefined ? { conditionValue: input.conditionValue } : {}),
+        ...(input.ownerOnly !== undefined ? { ownerOnly: input.ownerOnly } : {})
+      }
+    });
+    if (row.ownerOnly) {
+      await db.userBadge.deleteMany({ where: { badgeId, user: { role: { not: "OWNER" } } } });
+    }
+    await this.adminLog(actorId, "Aggiorna badge", row.id, { slug: row.slug, name: row.name });
+    return this.badge(row);
+  }
+
+  async deleteBadge(actorId: string, badgeId: string) {
+    await this.assertAdmin(actorId);
+    const db = await this.db();
+    const badge = await db.badge.findUnique({ where: { id: badgeId } });
+    if (!badge) {
+      throw new Error("Badge non trovato.");
+    }
+    await db.userBadge.deleteMany({ where: { badgeId } });
+    await db.badge.delete({ where: { id: badgeId } });
+    await this.adminLog(actorId, "Elimina badge", badgeId, { slug: badge.slug, name: badge.name });
   }
 
   async equipBadge(userId: string, badgeId: string, slot: number) {
@@ -1294,20 +1374,24 @@ export class PrismaStore implements FramoryStore {
     slug: string;
     name: string;
     description: string;
+    imageUrl: string | null;
     rarity: keyof typeof DbBadgeRarity;
     category: keyof typeof DbBadgeCategory;
     conditionKind: keyof typeof DbBadgeConditionKind;
     conditionValue: number | null;
+    ownerOnly: boolean;
   }): Badge {
     return {
       id: row.id,
       slug: row.slug,
       name: row.name,
       description: row.description,
+      imageUrl: row.imageUrl,
       rarity: rarityFromDb[row.rarity],
       category: categoryFromDb[row.category],
       conditionKind: conditionFromDb[row.conditionKind],
-      conditionValue: row.conditionValue
+      conditionValue: row.conditionValue,
+      ownerOnly: row.ownerOnly
     };
   }
 
@@ -1400,7 +1484,7 @@ export class PrismaStore implements FramoryStore {
   }
 
   private async unlockAdminCreatedBadge(userId: string) {
-    const badge = await (await this.db()).badge.findFirst({ where: { conditionKind: "ADMIN_CREATED" } });
+    const badge = await (await this.db()).badge.findFirst({ where: { conditionKind: "ADMIN_CREATED", ownerOnly: false } });
     if (badge) {
       await this.unlockBadge(userId, badge.id, "system");
     }
@@ -1410,8 +1494,12 @@ export class PrismaStore implements FramoryStore {
     const db = await this.db();
     const completedEpisodes = await db.episodeProgress.count({ where: { userId, completed: true } });
     const completedFranchises = await db.libraryEntry.count({ where: { userId, state: "COMPLETED" } });
+    const user = await db.user.findUnique({ where: { id: userId }, select: { role: true } });
     const badges = await db.badge.findMany();
     for (const badge of badges) {
+      if (badge.ownerOnly && user?.role !== "OWNER") {
+        continue;
+      }
       if (badge.conditionKind === "EPISODES_WATCHED" && completedEpisodes >= (badge.conditionValue ?? 0)) {
         await this.unlockBadge(userId, badge.id, "system");
       }
@@ -1423,6 +1511,16 @@ export class PrismaStore implements FramoryStore {
 
   private async unlockBadge(userId: string, badgeId: string, assignedBy?: string | null) {
     const db = await this.db();
+    const [user, badge] = await Promise.all([db.user.findUnique({ where: { id: userId } }), db.badge.findUnique({ where: { id: badgeId } })]);
+    if (!user) {
+      throw new Error("Utente non trovato.");
+    }
+    if (!badge) {
+      throw new Error("Badge non trovato.");
+    }
+    if (badge.ownerOnly && user.role !== "OWNER") {
+      throw new Error("Badge riservato all'owner.");
+    }
     await db.userBadge.upsert({
       where: { userId_badgeId: { userId, badgeId } },
       update: {},

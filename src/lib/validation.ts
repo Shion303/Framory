@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { animeStatuses, libraryStates, privacyLevels, roles, workFormats } from "./constants";
+import { animeStatuses, badgeCategories, badgeConditionKinds, badgeRarities, libraryStates, privacyLevels, roles, workFormats } from "./constants";
 
 export const registerSchema = z.object({
   email: z.string().email().max(160),
@@ -92,4 +92,43 @@ export const profileUpdateSchema = z.object({
 export const userAdminUpdateSchema = z.object({
   role: z.enum(roles).optional(),
   isActive: z.boolean().optional()
+});
+
+const badgeBaseSchema = z.object({
+  slug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(2)
+    .max(80)
+    .regex(/^[a-z0-9-]+$/, "Usa solo lettere minuscole, numeri e trattini"),
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().min(5).max(1000),
+  imageUrl: z.string().url().optional().nullable().or(z.literal("")),
+  rarity: z.enum(badgeRarities),
+  category: z.enum(badgeCategories),
+  conditionKind: z.enum(badgeConditionKinds),
+  conditionValue: z.number().int().min(0).max(100000).nullable().optional(),
+  ownerOnly: z.boolean().default(false)
+});
+
+export const badgeSchema = badgeBaseSchema
+  .superRefine((input, ctx) => {
+    if ((input.conditionKind === "episodes_watched" || input.conditionKind === "franchises_completed") && input.conditionValue == null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["conditionValue"],
+        message: "Inserisci una soglia per i badge automatici."
+      });
+    }
+  });
+
+export const badgeUpdateSchema = badgeBaseSchema.partial().superRefine((input, ctx) => {
+  if ((input.conditionKind === "episodes_watched" || input.conditionKind === "franchises_completed") && input.conditionValue == null) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["conditionValue"],
+      message: "Inserisci una soglia per i badge automatici."
+    });
+  }
 });

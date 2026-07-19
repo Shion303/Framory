@@ -134,10 +134,12 @@ export type Badge = {
   slug: string;
   name: string;
   description: string;
+  imageUrl?: string | null;
   rarity: BadgeRarity;
   category: BadgeCategory;
   conditionKind: BadgeConditionKind;
   conditionValue?: number | null;
+  ownerOnly: boolean;
 };
 
 export type UserBadge = {

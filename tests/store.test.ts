@@ -118,6 +118,76 @@ describe("FileStore", () => {
     expect(equipped.find((badge) => badge.badgeId === firstEpisode!.badgeId)?.equippedSlot).toBe(1);
   });
 
+  it("gestisce creazione, modifica, assegnazione ed eliminazione badge admin", async () => {
+    const store = await freshStore();
+    const owner = await store.getUserByEmail("owner-unit@framory.test");
+    const user = await store.createUser({
+      email: "badge-user@framory.test",
+      username: "badgeuser",
+      displayName: "Badge User",
+      passwordHash: await hashPassword("PasswordSicura123!")
+    });
+
+    const badge = await store.createBadge(owner!.id, {
+      slug: "badge-test",
+      name: "Badge Test",
+      description: "Badge creato dal pannello admin.",
+      imageUrl: "https://example.com/badge-test.png",
+      rarity: "raro",
+      category: "admin",
+      conditionKind: "manual",
+      conditionValue: null,
+      ownerOnly: false
+    });
+    expect((await store.listBadges()).badges.find((item) => item.slug === "badge-test")).toBeTruthy();
+
+    const updated = await store.updateBadge(owner!.id, badge.id, {
+      slug: "badge-test-editato",
+      name: "Badge Test Editato",
+      description: "Badge aggiornato dal pannello admin.",
+      imageUrl: "https://example.com/badge-test-editato.png",
+      rarity: "epico",
+      category: "community",
+      conditionKind: "admin_created",
+      conditionValue: null,
+      ownerOnly: false
+    });
+    expect(updated).toMatchObject({ slug: "badge-test-editato", imageUrl: "https://example.com/badge-test-editato.png", rarity: "epico", category: "community" });
+
+    await store.grantBadge(owner!.id, user.id, badge.id);
+    expect((await store.listBadges(user.id)).userBadges.find((item) => item.badge.name === "Badge Test Editato")).toBeTruthy();
+
+    await store.deleteBadge(owner!.id, badge.id);
+    const badges = await store.listBadges(user.id);
+    expect(badges.badges.find((item) => item.id === badge.id)).toBeUndefined();
+    expect(badges.userBadges.find((item) => item.badgeId === badge.id)).toBeUndefined();
+  });
+
+  it("impedisce ai non-owner di ottenere badge riservati all'owner", async () => {
+    const store = await freshStore();
+    const owner = await store.getUserByEmail("owner-unit@framory.test");
+    const user = await store.createUser({
+      email: "standard@framory.test",
+      username: "standard",
+      displayName: "Standard",
+      passwordHash: await hashPassword("PasswordSicura123!")
+    });
+    const badge = await store.createBadge(owner!.id, {
+      slug: "owner-unico",
+      name: "Owner Unico",
+      description: "Badge riservato soltanto all'account owner.",
+      imageUrl: "https://example.com/owner.png",
+      rarity: "leggendario",
+      category: "admin",
+      conditionKind: "manual",
+      conditionValue: null,
+      ownerOnly: true
+    });
+
+    await expect(store.grantBadge(owner!.id, user.id, badge.id)).rejects.toThrow("owner");
+    await expect(store.grantBadge(owner!.id, owner!.id, badge.id)).resolves.toMatchObject({ userId: owner!.id, badgeId: badge.id });
+  });
+
   it("importa automaticamente franchise AniList senza duplicati", async () => {
     const store = await freshStore();
     const sequel: AniListImportCandidate = {

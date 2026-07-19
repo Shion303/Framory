@@ -97,37 +97,45 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     slug: "primo-episodio",
     name: "Primo episodio",
     description: "Hai segnato il tuo primo episodio su Framory.",
+    imageUrl: null,
     rarity: "comune",
     category: "tracking",
     conditionKind: "episodes_watched",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   },
   {
     slug: "dieci-episodi",
     name: "Dieci episodi",
     description: "Hai completato dieci episodi.",
+    imageUrl: null,
     rarity: "raro",
     category: "tracking",
     conditionKind: "episodes_watched",
-    conditionValue: 10
+    conditionValue: 10,
+    ownerOnly: false
   },
   {
     slug: "franchise-completo",
     name: "Franchise completato",
     description: "Hai completato un intero franchise.",
+    imageUrl: null,
     rarity: "epico",
     category: "collezione",
     conditionKind: "franchises_completed",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   },
   {
     slug: "curatore",
     name: "Curatore",
     description: "Hai contribuito alla struttura del catalogo.",
+    imageUrl: null,
     rarity: "raro",
     category: "admin",
     conditionKind: "admin_created",
-    conditionValue: 1
+    conditionValue: 1,
+    ownerOnly: false
   }
 ];
 
@@ -162,6 +170,32 @@ export class FileStore implements FramoryStore {
     for (const badge of defaultBadges) {
       if (!data.badges.some((item) => item.slug === badge.slug)) {
         data.badges.push({ id: randomUUID(), ...badge });
+        changed = true;
+      }
+    }
+    for (const badge of data.badges) {
+      if (badge.imageUrl === undefined) {
+        badge.imageUrl = null;
+        changed = true;
+      }
+      if (badge.ownerOnly === undefined) {
+        badge.ownerOnly = false;
+        changed = true;
+      }
+    }
+    const userBadgesCount = data.userBadges.length;
+    data.userBadges = data.userBadges.filter((userBadge) => {
+      const badge = data.badges.find((item) => item.id === userBadge.badgeId);
+      const user = data.users.find((item) => item.id === userBadge.userId);
+      return !badge?.ownerOnly || user?.role === "owner";
+    });
+    if (data.userBadges.length !== userBadgesCount) {
+      changed = true;
+    }
+    for (const userBadge of data.userBadges) {
+      const badge = data.badges.find((item) => item.id === userBadge.badgeId);
+      if (badge && userBadge.badge !== badge) {
+        userBadge.badge = badge;
         changed = true;
       }
     }
@@ -756,6 +790,68 @@ export class FileStore implements FramoryStore {
     };
   }
 
+  async createBadge(actorId: string, input: Parameters<FramoryStore["createBadge"]>[1]) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    if (data.badges.some((badge) => badge.slug === input.slug)) {
+      throw new Error("Esiste gia un badge con questo slug.");
+    }
+    const badge: Badge = {
+      id: randomUUID(),
+      ...input,
+      imageUrl: nullableUrl(input.imageUrl),
+      conditionValue: input.conditionValue ?? null,
+      ownerOnly: input.ownerOnly ?? false
+    };
+    data.badges.push(badge);
+    this.adminLog(data, actorId, "Crea badge", badge.id, { slug: badge.slug, name: badge.name });
+    await this.write(data);
+    return badge;
+  }
+
+  async updateBadge(actorId: string, badgeId: string, input: Parameters<FramoryStore["updateBadge"]>[2]) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const badge = data.badges.find((item) => item.id === badgeId);
+    if (!badge) {
+      throw new Error("Badge non trovato.");
+    }
+    if (input.slug && data.badges.some((item) => item.id !== badgeId && item.slug === input.slug)) {
+      throw new Error("Esiste gia un badge con questo slug.");
+    }
+    Object.assign(badge, {
+      ...input,
+      imageUrl: input.imageUrl === undefined ? badge.imageUrl : nullableUrl(input.imageUrl),
+      conditionValue: input.conditionValue === undefined ? badge.conditionValue : input.conditionValue,
+      ownerOnly: input.ownerOnly ?? badge.ownerOnly
+    });
+    if (badge.ownerOnly) {
+      data.userBadges = data.userBadges.filter((item) => {
+        const user = data.users.find((candidate) => candidate.id === item.userId);
+        return item.badgeId !== badgeId || user?.role === "owner";
+      });
+    }
+    for (const userBadge of data.userBadges.filter((item) => item.badgeId === badgeId)) {
+      userBadge.badge = badge;
+    }
+    this.adminLog(data, actorId, "Aggiorna badge", badge.id, { slug: badge.slug, name: badge.name });
+    await this.write(data);
+    return badge;
+  }
+
+  async deleteBadge(actorId: string, badgeId: string) {
+    const data = await this.read();
+    this.assertAdmin(data, actorId);
+    const badge = data.badges.find((item) => item.id === badgeId);
+    if (!badge) {
+      throw new Error("Badge non trovato.");
+    }
+    data.badges = data.badges.filter((item) => item.id !== badgeId);
+    data.userBadges = data.userBadges.filter((item) => item.badgeId !== badgeId);
+    this.adminLog(data, actorId, "Elimina badge", badgeId, { slug: badge.slug, name: badge.name });
+    await this.write(data);
+  }
+
   async equipBadge(userId: string, badgeId: string, slot: number) {
     if (slot < 1 || slot > 3) {
       throw new Error("Puoi equipaggiare badge solo negli slot 1, 2 o 3.");
@@ -1180,7 +1276,7 @@ export class FileStore implements FramoryStore {
   }
 
   private unlockAdminCreatedBadge(data: DataFile, userId: string) {
-    const badge = data.badges.find((item) => item.conditionKind === "admin_created");
+    const badge = data.badges.find((item) => item.conditionKind === "admin_created" && !item.ownerOnly);
     if (badge) {
       this.unlockBadge(data, userId, badge.id, "system");
     }
@@ -1189,7 +1285,11 @@ export class FileStore implements FramoryStore {
   private unlockAutomaticBadges(data: DataFile, userId: string) {
     const completedEpisodes = data.episodeProgress.filter((row) => row.userId === userId && row.completed).length;
     const completedFranchises = data.libraryEntries.filter((entry) => entry.userId === userId && entry.state === "completato").length;
+    const user = data.users.find((item) => item.id === userId);
     for (const badge of data.badges) {
+      if (badge.ownerOnly && user?.role !== "owner") {
+        continue;
+      }
       if (badge.conditionKind === "episodes_watched" && completedEpisodes >= (badge.conditionValue ?? 0)) {
         this.unlockBadge(data, userId, badge.id, "system");
       }
@@ -1207,6 +1307,13 @@ export class FileStore implements FramoryStore {
     const badge = data.badges.find((item) => item.id === badgeId);
     if (!badge) {
       throw new Error("Badge non trovato.");
+    }
+    const user = data.users.find((item) => item.id === userId);
+    if (!user) {
+      throw new Error("Utente non trovato.");
+    }
+    if (badge.ownerOnly && user.role !== "owner") {
+      throw new Error("Badge riservato all'owner.");
     }
     const userBadge: UserBadge = {
       id: randomUUID(),
