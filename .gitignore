@@ -9,3 +9,5 @@ test-results/
 src/generated/
 dist/
 *.tsbuildinfo
+
+blobs/
