@@ -27,6 +27,7 @@ export function LibraryClient() {
       body: JSON.stringify(patch)
     });
     setEntries((current) => current.map((item) => (item.id === entry.id ? payload.entry : item)));
+    window.dispatchEvent(new Event("framory:badges-refresh"));
   }
 
   async function remove(entry: LibraryEntry) {

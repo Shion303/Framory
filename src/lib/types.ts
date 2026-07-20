@@ -3,9 +3,19 @@ export type PrivacyLevel = "pubblico" | "follower" | "privato";
 export type AnimeStatus = "annunciato" | "in_corso" | "concluso" | "in_pausa";
 export type WorkFormat = "tv" | "film" | "ova" | "ona" | "special";
 export type LibraryState = "pianificato" | "in_visione" | "completato" | "in_pausa" | "interrotto";
+export type FriendRequestStatus = "in_attesa" | "accettata" | "rifiutata";
+export type FriendshipState = "self" | "none" | "pending_sent" | "pending_received" | "friends";
 export type BadgeRarity = "comune" | "raro" | "epico" | "leggendario";
-export type BadgeCategory = "tracking" | "collezione" | "community" | "admin";
-export type BadgeConditionKind = "episodes_watched" | "franchises_completed" | "manual" | "admin_created";
+export type BadgeCategory = "tracking" | "collezione" | "community" | "social" | "evento" | "admin";
+export type BadgeKind = "standard" | "milestone" | "evento" | "esclusivo";
+export type BadgeConditionKind =
+  | "episodes_watched"
+  | "franchises_completed"
+  | "library_count"
+  | "favorites_count"
+  | "profile_completed"
+  | "manual"
+  | "admin_created";
 export type ActivityKind =
   | "registered"
   | "library_added"
@@ -29,6 +39,48 @@ export type PublicUser = {
   progressPrivacy: PrivacyLevel;
   activityPrivacy: PrivacyLevel;
   createdAt: string;
+};
+
+export type SocialUser = PublicUser & {
+  friendship: FriendshipState;
+};
+
+export type FriendRequest = {
+  id: string;
+  requesterId: string;
+  addresseeId: string;
+  status: FriendRequestStatus;
+  requester: PublicUser;
+  addressee: PublicUser;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Friendship = {
+  id: string;
+  userId: string;
+  friendId: string;
+  friend: PublicUser;
+  createdAt: string;
+};
+
+export type PrivateMessage = {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  body: string;
+  createdAt: string;
+  sender: PublicUser;
+  receiver: PublicUser;
+};
+
+export type FranchiseChatMessage = {
+  id: string;
+  franchiseId: string;
+  userId: string;
+  body: string;
+  createdAt: string;
+  user: PublicUser;
 };
 
 export type Franchise = {
@@ -137,6 +189,7 @@ export type Badge = {
   imageUrl?: string | null;
   rarity: BadgeRarity;
   category: BadgeCategory;
+  kind: BadgeKind;
   conditionKind: BadgeConditionKind;
   conditionValue?: number | null;
   ownerOnly: boolean;

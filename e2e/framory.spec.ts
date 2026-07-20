@@ -10,13 +10,19 @@ test("app usa Luckiest Guy", async ({ page }) => {
   const brand = page.getByRole("link", { name: "Framory" });
   await expect(brand).toBeVisible();
   await expect(brand).toHaveCSS("font-family", /Luckiest Guy/);
+
+  await page.goto("/badge");
+  await expect(page.getByRole("heading", { name: "Primo episodio" })).toHaveCount(0);
+  await expect(page.getByText("Accedi per vedere i badge sbloccati.")).toBeVisible();
 });
 
 test("flusso principale Framory 1.0", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").fill("owner@framory.test");
   await page.getByLabel("Password").fill("OwnerPassword123!");
-  await page.getByRole("button", { name: /Entra/ }).click();
+  const ownerLogin = page.getByRole("button", { name: /Entra/ });
+  await expect(ownerLogin).toHaveAttribute("data-ready", "true");
+  await ownerLogin.click();
   await expect(page.getByText("Bentornato, Owner Framory")).toBeVisible();
 
   const franchiseResponse = await page.request.post("/api/admin/franchises", {
@@ -75,6 +81,13 @@ test("flusso principale Framory 1.0", async ({ page }) => {
     }
   });
   expect(episodeResponse.ok()).toBe(true);
+  await expect
+    .poll(async () => {
+      const response = await page.request.get("/api/franchises?query=E2E%20Anime");
+      const payload = await response.json();
+      return payload.total;
+    })
+    .toBe(1);
   await page.request.post("/api/auth/logout");
 
   await page.goto("/registrazione");
@@ -82,12 +95,17 @@ test("flusso principale Framory 1.0", async ({ page }) => {
   await page.getByLabel("Username").fill("utentee2e");
   await page.getByLabel("Nome visualizzato").fill("Utente E2E");
   await page.getByLabel("Password").fill("PasswordSicura123!");
-  await page.getByRole("button", { name: /Crea account/ }).click();
+  const userRegister = page.getByRole("button", { name: /Crea account/ });
+  await expect(userRegister).toHaveAttribute("data-ready", "true");
+  await userRegister.click();
   await expect(page.getByText("Bentornato, Utente E2E")).toBeVisible();
 
   await page.goto("/scopri");
+  await expect(page.getByRole("heading", { name: "Discovery" })).toBeVisible();
   await page.getByPlaceholder("Cerca franchise").fill("E2E Anime");
-  await page.getByRole("button", { name: /Cerca/ }).click();
+  const discoverySearch = page.getByRole("button", { name: /Cerca/ });
+  await expect(discoverySearch).toHaveAttribute("data-ready", "true");
+  await discoverySearch.click();
   await expect(page.getByRole("link", { name: "E2E Anime" })).toBeVisible();
   await page.getByRole("button", { name: /Libreria/ }).click();
   await expect(page.getByText("Franchise aggiunto alla libreria.")).toBeVisible();
@@ -99,8 +117,22 @@ test("flusso principale Framory 1.0", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Episodi completati")).toBeVisible();
   await expect(page.getByRole("group", { name: "Episodi completati: 1" })).toBeVisible();
+  await expect
+    .poll(async () => {
+      const me = await (await page.request.get("/api/me")).json();
+      return me.user?.username ?? null;
+    })
+    .toBe("utentee2e");
+  await expect
+    .poll(async () => {
+      const payload = await (await page.request.get("/api/badges")).json();
+      return payload.userBadges.some((badge: { badge?: { slug?: string } }) => badge.badge?.slug === "primo-episodio");
+    })
+    .toBe(true);
 
   await page.goto("/badge");
+  await expect(page.getByRole("link", { name: "Utente E2E" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dieci episodi" })).toHaveCount(0);
   const firstEpisodeBadge = page.locator("article").filter({ has: page.getByRole("heading", { name: "Primo episodio" }) });
   await expect(firstEpisodeBadge).toBeVisible();
   await firstEpisodeBadge.getByRole("button", { name: "Slot 1" }).click();
@@ -118,7 +150,9 @@ test("autorizzazioni admin e account disattivato", async ({ page }) => {
   await page.getByLabel("Username").fill("noadmin");
   await page.getByLabel("Nome visualizzato").fill("No Admin");
   await page.getByLabel("Password").fill("PasswordSicura123!");
-  await page.getByRole("button", { name: /Crea account/ }).click();
+  const noAdminRegister = page.getByRole("button", { name: /Crea account/ });
+  await expect(noAdminRegister).toHaveAttribute("data-ready", "true");
+  await noAdminRegister.click();
   await expect(page.getByText("Bentornato, No Admin")).toBeVisible();
   await page.goto("/admin");
   await expect(page.getByText("Permesso moderazione richiesto.")).toBeVisible();
@@ -128,7 +162,9 @@ test("autorizzazioni admin e account disattivato", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").fill("owner@framory.test");
   await page.getByLabel("Password").fill("OwnerPassword123!");
-  await page.getByRole("button", { name: /Entra/ }).click();
+  const adminLogin = page.getByRole("button", { name: /Entra/ });
+  await expect(adminLogin).toHaveAttribute("data-ready", "true");
+  await adminLogin.click();
   await expect(page.getByText("Bentornato, Owner Framory")).toBeVisible();
   const deactivateResponse = await page.request.patch(`/api/admin/users/${me.user.id}`, { data: { isActive: false } });
   expect(deactivateResponse.ok()).toBe(true);
@@ -137,7 +173,9 @@ test("autorizzazioni admin e account disattivato", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").fill("noadmin@framory.test");
   await page.getByLabel("Password").fill("PasswordSicura123!");
-  await page.getByRole("button", { name: /Entra/ }).click();
+  const disabledLogin = page.getByRole("button", { name: /Entra/ });
+  await expect(disabledLogin).toHaveAttribute("data-ready", "true");
+  await disabledLogin.click();
   await expect(page.getByText("Account disattivato.")).toBeVisible();
 });
 
@@ -145,7 +183,9 @@ test("pannello admin semplificato e badge custom", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").fill("owner@framory.test");
   await page.getByLabel("Password").fill("OwnerPassword123!");
-  await page.getByRole("button", { name: /Entra/ }).click();
+  const badgeAdminLogin = page.getByRole("button", { name: /Entra/ });
+  await expect(badgeAdminLogin).toHaveAttribute("data-ready", "true");
+  await badgeAdminLogin.click();
   await expect(page.getByText("Bentornato, Owner Framory")).toBeVisible();
 
   await page.goto("/admin");

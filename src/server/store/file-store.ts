@@ -8,9 +8,14 @@ import type {
   Episode,
   EpisodeProgress,
   Franchise,
+  FranchiseChatMessage,
   FranchiseFilters,
+  FriendRequest,
+  Friendship,
+  FriendshipState,
   HomePayload,
   LibraryEntry,
+  PrivateMessage,
   PublicUser,
   Report,
   UserBadge
@@ -18,7 +23,7 @@ import type {
 import { clampScore, nowIso, slugify } from "@/lib/format";
 import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
-import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
+import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate, verifyPassword } from "@/server/security";
 import {
   ANILIST_COLLECTION_TITLE,
   animeTitleKeysForCandidate,
@@ -64,6 +69,10 @@ type DataFile = {
   episodeProgress: EpisodeProgress[];
   badges: Badge[];
   userBadges: UserBadge[];
+  friendRequests: FriendRequest[];
+  friendships: Array<{ id: string; userAId: string; userBId: string; createdAt: string }>;
+  privateMessages: PrivateMessage[];
+  franchiseChatMessages: FranchiseChatMessage[];
   activities: Activity[];
   reports: ReportRecord[];
   adminLogs: AdminLog[];
@@ -84,6 +93,10 @@ const emptyData = (): DataFile => ({
   episodeProgress: [],
   badges: [],
   userBadges: [],
+  friendRequests: [],
+  friendships: [],
+  privateMessages: [],
+  franchiseChatMessages: [],
   activities: [],
   reports: [],
   adminLogs: [],
@@ -100,6 +113,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "comune",
     category: "tracking",
+    kind: "milestone",
     conditionKind: "episodes_watched",
     conditionValue: 1,
     ownerOnly: false
@@ -111,6 +125,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "raro",
     category: "tracking",
+    kind: "milestone",
     conditionKind: "episodes_watched",
     conditionValue: 10,
     ownerOnly: false
@@ -122,8 +137,45 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "epico",
     category: "collezione",
+    kind: "milestone",
     conditionKind: "franchises_completed",
     conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "primo-franchise",
+    name: "Primo franchise",
+    description: "Hai aggiunto il tuo primo franchise alla libreria.",
+    imageUrl: null,
+    rarity: "comune",
+    category: "collezione",
+    kind: "milestone",
+    conditionKind: "library_count",
+    conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "primo-preferito",
+    name: "Primo preferito",
+    description: "Hai segnato un franchise come preferito.",
+    imageUrl: null,
+    rarity: "raro",
+    category: "collezione",
+    kind: "standard",
+    conditionKind: "favorites_count",
+    conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "profilo-curato",
+    name: "Profilo curato",
+    description: "Hai completato bio e immagine del profilo.",
+    imageUrl: null,
+    rarity: "raro",
+    category: "community",
+    kind: "standard",
+    conditionKind: "profile_completed",
+    conditionValue: null,
     ownerOnly: false
   },
   {
@@ -133,6 +185,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "raro",
     category: "admin",
+    kind: "esclusivo",
     conditionKind: "admin_created",
     conditionValue: 1,
     ownerOnly: false
@@ -153,8 +206,13 @@ function nullableUrl(value: string | null | undefined) {
   return value && value.trim() ? value.trim() : null;
 }
 
+function friendshipPair(userId: string, friendId: string) {
+  return [userId, friendId].sort() as [string, string];
+}
+
 export class FileStore implements FramoryStore {
   private readonly filePath: string;
+  private ownerPasswordSynced = false;
 
   constructor(filePath = process.env.FRAMORY_DATA_FILE ?? ".framory/framory-data.json") {
     this.filePath = resolve(/*turbopackIgnore: true*/ process.cwd(), filePath);
@@ -182,6 +240,10 @@ export class FileStore implements FramoryStore {
         badge.ownerOnly = false;
         changed = true;
       }
+      if (badge.kind === undefined) {
+        badge.kind = badge.ownerOnly ? "esclusivo" : badge.conditionKind === "manual" ? "standard" : "milestone";
+        changed = true;
+      }
     }
     const userBadgesCount = data.userBadges.length;
     data.userBadges = data.userBadges.filter((userBadge) => {
@@ -200,30 +262,55 @@ export class FileStore implements FramoryStore {
       }
     }
 
-    const ownerEmail = process.env.FRAMORY_OWNER_EMAIL?.toLowerCase();
+    const ownerEmail = process.env.FRAMORY_OWNER_EMAIL?.trim().toLowerCase();
     const ownerPassword = process.env.FRAMORY_OWNER_PASSWORD;
     const ownerUsername = process.env.FRAMORY_OWNER_USERNAME ?? "owner";
     const ownerDisplayName = process.env.FRAMORY_OWNER_DISPLAY_NAME ?? "Owner Framory";
-    if (ownerEmail && ownerPassword && !data.users.some((user) => user.role === "owner")) {
+    if (ownerEmail && ownerPassword) {
       const now = nowIso();
-      data.users.push({
-        id: randomUUID(),
-        email: ownerEmail,
-        username: ownerUsername,
-        displayName: ownerDisplayName,
-        passwordHash: await hashPassword(ownerPassword),
-        role: "owner",
-        isActive: true,
-        avatarUrl: null,
-        bannerUrl: null,
-        bio: "Account owner generato da variabili ambiente.",
-        profilePrivacy: "pubblico",
-        libraryPrivacy: "pubblico",
-        progressPrivacy: "pubblico",
-        activityPrivacy: "pubblico",
-        createdAt: now
-      });
-      changed = true;
+      let owner = data.users.find((user) => user.email?.toLowerCase() === ownerEmail);
+      if (!owner) {
+        owner = {
+          id: randomUUID(),
+          email: ownerEmail,
+          username: ownerUsername,
+          displayName: ownerDisplayName,
+          passwordHash: await hashPassword(ownerPassword),
+          role: "owner",
+          isActive: true,
+          avatarUrl: null,
+          bannerUrl: null,
+          bio: "Account owner generato da variabili ambiente.",
+          profilePrivacy: "pubblico",
+          libraryPrivacy: "pubblico",
+          progressPrivacy: "pubblico",
+          activityPrivacy: "pubblico",
+          createdAt: now
+        };
+        data.users.push(owner);
+        this.ownerPasswordSynced = true;
+        changed = true;
+      }
+      for (const user of data.users) {
+        if (user.email?.toLowerCase() !== ownerEmail && user.role === "owner") {
+          user.role = "admin";
+          changed = true;
+        }
+      }
+      if (owner.role !== "owner") {
+        owner.role = "owner";
+        changed = true;
+      }
+      if (!owner.isActive) {
+        owner.isActive = true;
+        changed = true;
+      }
+      if (!this.ownerPasswordSynced && !(await verifyPassword(ownerPassword, owner.passwordHash))) {
+        owner.passwordHash = await hashPassword(ownerPassword);
+        data.sessions = data.sessions.filter((session) => session.userId !== owner.id);
+        changed = true;
+      }
+      this.ownerPasswordSynced = true;
     }
 
     return changed;
@@ -233,6 +320,7 @@ export class FileStore implements FramoryStore {
     if (process.env.FRAMORY_ALLOW_TEST_RESET !== "1") {
       throw new Error("Reset test non consentito in questo ambiente.");
     }
+    this.ownerPasswordSynced = false;
     await rm(this.filePath, { force: true });
     await this.ensureReady();
   }
@@ -659,6 +747,7 @@ export class FileStore implements FramoryStore {
       metadata: { franchiseId },
       createdAt: now
     });
+    this.unlockAutomaticBadges(data, userId);
     await this.write(data);
     return this.withLibraryDetails(data, entry);
   }
@@ -676,6 +765,7 @@ export class FileStore implements FramoryStore {
       notes: input.notes === undefined ? entry.notes : input.notes,
       updatedAt: nowIso()
     });
+    this.unlockAutomaticBadges(data, userId);
     await this.write(data);
     return this.withLibraryDetails(data, entry);
   }
@@ -784,6 +874,13 @@ export class FileStore implements FramoryStore {
 
   async listBadges(userId?: string) {
     const data = await this.read();
+    if (userId) {
+      const unlockedBefore = data.userBadges.length;
+      this.unlockAutomaticBadges(data, userId);
+      if (data.userBadges.length !== unlockedBefore) {
+        await this.write(data);
+      }
+    }
     return {
       badges: [...data.badges].sort((a, b) => a.name.localeCompare(b.name, "it")),
       userBadges: userId ? data.userBadges.filter((item) => item.userId === userId) : []
@@ -800,6 +897,7 @@ export class FileStore implements FramoryStore {
       id: randomUUID(),
       ...input,
       imageUrl: nullableUrl(input.imageUrl),
+      kind: input.kind ?? "standard",
       conditionValue: input.conditionValue ?? null,
       ownerOnly: input.ownerOnly ?? false
     };
@@ -822,6 +920,7 @@ export class FileStore implements FramoryStore {
     Object.assign(badge, {
       ...input,
       imageUrl: input.imageUrl === undefined ? badge.imageUrl : nullableUrl(input.imageUrl),
+      kind: input.kind ?? badge.kind,
       conditionValue: input.conditionValue === undefined ? badge.conditionValue : input.conditionValue,
       ownerOnly: input.ownerOnly ?? badge.ownerOnly
     });
@@ -899,6 +998,7 @@ export class FileStore implements FramoryStore {
       avatarUrl: nullableUrl(input.avatarUrl ?? user.avatarUrl),
       bannerUrl: nullableUrl(input.bannerUrl ?? user.bannerUrl)
     });
+    this.unlockAutomaticBadges(data, userId);
     await this.write(data);
     return publicUser(user);
   }
@@ -1005,6 +1105,160 @@ export class FileStore implements FramoryStore {
     this.adminLog(data, actorId, "Aggiorna utente", userId, input);
     await this.write(data);
     return publicUser(user);
+  }
+
+  async searchUsers(viewerId: string, query: string) {
+    const data = await this.read();
+    const needle = query.trim().toLowerCase();
+    if (needle.length < 2) {
+      return [];
+    }
+    return data.users
+      .filter((user) => user.isActive)
+      .filter((user) => user.displayName.toLowerCase().includes(needle) || user.username.toLowerCase().includes(needle))
+      .slice(0, 20)
+      .map((user) => ({
+        ...publicUser(user),
+        friendship: this.friendshipState(data, viewerId, user.id)
+      }));
+  }
+
+  async getSocialSummary(userId: string) {
+    const data = await this.read();
+    return {
+      friends: this.friendshipsForUser(data, userId),
+      incoming: data.friendRequests
+        .filter((request) => request.addresseeId === userId && request.status === "in_attesa")
+        .map((request) => this.friendRequest(data, request)),
+      outgoing: data.friendRequests
+        .filter((request) => request.requesterId === userId && request.status === "in_attesa")
+        .map((request) => this.friendRequest(data, request))
+    };
+  }
+
+  async sendFriendRequest(userId: string, targetId: string) {
+    const data = await this.read();
+    if (userId === targetId) {
+      throw new Error("Non puoi inviare una richiesta a te stesso.");
+    }
+    this.assertActiveUser(data, userId);
+    this.assertActiveUser(data, targetId);
+    if (this.areFriends(data, userId, targetId)) {
+      throw new Error("Siete gia amici.");
+    }
+    const reverse = data.friendRequests.find((request) => request.requesterId === targetId && request.addresseeId === userId && request.status === "in_attesa");
+    if (reverse) {
+      return this.acceptFriendRequest(data, userId, reverse.id);
+    }
+    const existing = data.friendRequests.find((request) => request.requesterId === userId && request.addresseeId === targetId);
+    if (existing) {
+      existing.status = "in_attesa";
+      existing.updatedAt = nowIso();
+      await this.write(data);
+      return this.friendRequest(data, existing);
+    }
+    const now = nowIso();
+    const request: FriendRequest = {
+      id: randomUUID(),
+      requesterId: userId,
+      addresseeId: targetId,
+      status: "in_attesa",
+      requester: publicUser(data.users.find((user) => user.id === userId)!),
+      addressee: publicUser(data.users.find((user) => user.id === targetId)!),
+      createdAt: now,
+      updatedAt: now
+    };
+    data.friendRequests.push(request);
+    await this.write(data);
+    return this.friendRequest(data, request);
+  }
+
+  async respondFriendRequest(userId: string, requestId: string, action: "accept" | "decline") {
+    const data = await this.read();
+    if (action === "accept") {
+      return this.acceptFriendRequest(data, userId, requestId);
+    }
+    const request = data.friendRequests.find((item) => item.id === requestId);
+    if (!request || request.addresseeId !== userId) {
+      throw new Error("Richiesta amicizia non trovata.");
+    }
+    request.status = "rifiutata";
+    request.updatedAt = nowIso();
+    await this.write(data);
+    return this.friendRequest(data, request);
+  }
+
+  async removeFriend(userId: string, friendId: string) {
+    const data = await this.read();
+    const [userAId, userBId] = friendshipPair(userId, friendId);
+    data.friendships = data.friendships.filter((friendship) => !(friendship.userAId === userAId && friendship.userBId === userBId));
+    await this.write(data);
+  }
+
+  async getPrivateMessages(userId: string, friendId: string) {
+    const data = await this.read();
+    if (!this.areFriends(data, userId, friendId)) {
+      throw new Error("Puoi leggere messaggi privati solo con gli amici.");
+    }
+    return data.privateMessages
+      .filter((message) => (message.senderId === userId && message.receiverId === friendId) || (message.senderId === friendId && message.receiverId === userId))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .slice(-80)
+      .map((message) => this.privateMessage(data, message));
+  }
+
+  async sendPrivateMessage(userId: string, friendId: string, body: string) {
+    const data = await this.read();
+    if (!this.areFriends(data, userId, friendId)) {
+      throw new Error("Puoi inviare messaggi privati solo agli amici.");
+    }
+    const text = body.trim();
+    if (!text) {
+      throw new Error("Messaggio vuoto.");
+    }
+    const message: PrivateMessage = {
+      id: randomUUID(),
+      senderId: userId,
+      receiverId: friendId,
+      body: text.slice(0, 1000),
+      createdAt: nowIso(),
+      sender: publicUser(data.users.find((user) => user.id === userId)!),
+      receiver: publicUser(data.users.find((user) => user.id === friendId)!)
+    };
+    data.privateMessages.push(message);
+    await this.write(data);
+    return this.privateMessage(data, message);
+  }
+
+  async getFranchiseChat(_userId: string, franchiseId: string) {
+    const data = await this.read();
+    this.assertFranchise(data, franchiseId);
+    return data.franchiseChatMessages
+      .filter((message) => message.franchiseId === franchiseId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .slice(-100)
+      .map((message) => this.franchiseChatMessage(data, message));
+  }
+
+  async sendFranchiseChatMessage(userId: string, franchiseId: string, body: string) {
+    const data = await this.read();
+    this.assertActiveUser(data, userId);
+    this.assertFranchise(data, franchiseId);
+    const text = body.trim();
+    if (!text) {
+      throw new Error("Messaggio vuoto.");
+    }
+    const message: FranchiseChatMessage = {
+      id: randomUUID(),
+      franchiseId,
+      userId,
+      body: text.slice(0, 1000),
+      createdAt: nowIso(),
+      user: publicUser(data.users.find((user) => user.id === userId)!)
+    };
+    data.franchiseChatMessages.push(message);
+    await this.write(data);
+    return this.franchiseChatMessage(data, message);
   }
 
   private async read(): Promise<DataFile> {
@@ -1243,6 +1497,106 @@ export class FileStore implements FramoryStore {
     );
   }
 
+  private assertActiveUser(data: DataFile, userId: string) {
+    const user = data.users.find((item) => item.id === userId);
+    if (!user || !user.isActive) {
+      throw new Error("Utente non trovato.");
+    }
+  }
+
+  private areFriends(data: DataFile, userId: string, friendId: string) {
+    const [userAId, userBId] = friendshipPair(userId, friendId);
+    return data.friendships.some((friendship) => friendship.userAId === userAId && friendship.userBId === userBId);
+  }
+
+  private friendshipState(data: DataFile, viewerId: string, targetId: string): FriendshipState {
+    if (viewerId === targetId) {
+      return "self";
+    }
+    if (this.areFriends(data, viewerId, targetId)) {
+      return "friends";
+    }
+    if (data.friendRequests.some((request) => request.requesterId === viewerId && request.addresseeId === targetId && request.status === "in_attesa")) {
+      return "pending_sent";
+    }
+    if (data.friendRequests.some((request) => request.requesterId === targetId && request.addresseeId === viewerId && request.status === "in_attesa")) {
+      return "pending_received";
+    }
+    return "none";
+  }
+
+  private friendshipsForUser(data: DataFile, userId: string): Friendship[] {
+    return data.friendships
+      .filter((friendship) => friendship.userAId === userId || friendship.userBId === userId)
+      .map((friendship) => {
+        const friendId = friendship.userAId === userId ? friendship.userBId : friendship.userAId;
+        const friend = data.users.find((user) => user.id === friendId);
+        if (!friend) {
+          return null;
+        }
+        return {
+          id: friendship.id,
+          userId,
+          friendId,
+          friend: publicUser(friend),
+          createdAt: friendship.createdAt
+        };
+      })
+      .filter(Boolean) as Friendship[];
+  }
+
+  private friendRequest(data: DataFile, request: FriendRequest): FriendRequest {
+    const requester = data.users.find((user) => user.id === request.requesterId);
+    const addressee = data.users.find((user) => user.id === request.addresseeId);
+    if (!requester || !addressee) {
+      throw new Error("Richiesta amicizia non valida.");
+    }
+    return {
+      ...request,
+      requester: publicUser(requester),
+      addressee: publicUser(addressee)
+    };
+  }
+
+  private async acceptFriendRequest(data: DataFile, userId: string, requestId: string) {
+    const request = data.friendRequests.find((item) => item.id === requestId);
+    if (!request || request.addresseeId !== userId) {
+      throw new Error("Richiesta amicizia non trovata.");
+    }
+    request.status = "accettata";
+    request.updatedAt = nowIso();
+    const [userAId, userBId] = friendshipPair(request.requesterId, request.addresseeId);
+    if (!data.friendships.some((friendship) => friendship.userAId === userAId && friendship.userBId === userBId)) {
+      data.friendships.push({ id: randomUUID(), userAId, userBId, createdAt: nowIso() });
+    }
+    await this.write(data);
+    return this.friendRequest(data, request);
+  }
+
+  private privateMessage(data: DataFile, message: PrivateMessage): PrivateMessage {
+    const sender = data.users.find((user) => user.id === message.senderId);
+    const receiver = data.users.find((user) => user.id === message.receiverId);
+    if (!sender || !receiver) {
+      throw new Error("Messaggio privato non valido.");
+    }
+    return {
+      ...message,
+      sender: publicUser(sender),
+      receiver: publicUser(receiver)
+    };
+  }
+
+  private franchiseChatMessage(data: DataFile, message: FranchiseChatMessage): FranchiseChatMessage {
+    const user = data.users.find((item) => item.id === message.userId);
+    if (!user) {
+      throw new Error("Messaggio franchise non valido.");
+    }
+    return {
+      ...message,
+      user: publicUser(user)
+    };
+  }
+
   private assertFranchise(data: DataFile, franchiseId: string) {
     if (!data.franchises.some((item) => item.id === franchiseId)) {
       throw new Error("Franchise non trovato.");
@@ -1285,7 +1639,10 @@ export class FileStore implements FramoryStore {
   private unlockAutomaticBadges(data: DataFile, userId: string) {
     const completedEpisodes = data.episodeProgress.filter((row) => row.userId === userId && row.completed).length;
     const completedFranchises = data.libraryEntries.filter((entry) => entry.userId === userId && entry.state === "completato").length;
+    const libraryCount = data.libraryEntries.filter((entry) => entry.userId === userId).length;
+    const favoritesCount = data.libraryEntries.filter((entry) => entry.userId === userId && entry.favorite).length;
     const user = data.users.find((item) => item.id === userId);
+    const profileCompleted = Boolean(user?.bio?.trim() && (user.avatarUrl || user.bannerUrl));
     for (const badge of data.badges) {
       if (badge.ownerOnly && user?.role !== "owner") {
         continue;
@@ -1294,6 +1651,15 @@ export class FileStore implements FramoryStore {
         this.unlockBadge(data, userId, badge.id, "system");
       }
       if (badge.conditionKind === "franchises_completed" && completedFranchises >= (badge.conditionValue ?? 0)) {
+        this.unlockBadge(data, userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "library_count" && libraryCount >= (badge.conditionValue ?? 0)) {
+        this.unlockBadge(data, userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "favorites_count" && favoritesCount >= (badge.conditionValue ?? 0)) {
+        this.unlockBadge(data, userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "profile_completed" && profileCompleted) {
         this.unlockBadge(data, userId, badge.id, "system");
       }
     }

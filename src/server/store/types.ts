@@ -3,11 +3,16 @@ import type {
   Badge,
   EpisodeProgress,
   Franchise,
+  FranchiseChatMessage,
   FranchiseFilters,
+  FriendRequest,
+  Friendship,
   HomePayload,
   LibraryEntry,
+  PrivateMessage,
   PublicUser,
   Report,
+  SocialUser,
   UserBadge
 } from "@/lib/types";
 import type {
@@ -45,6 +50,12 @@ export type AdminSnapshot = {
   activities: Activity[];
   franchises: Franchise[];
   badges: Badge[];
+};
+
+export type SocialSummary = {
+  friends: Friendship[];
+  incoming: FriendRequest[];
+  outgoing: FriendRequest[];
 };
 
 export type FramoryStore = {
@@ -98,4 +109,13 @@ export type FramoryStore = {
   setMaintenanceMode(actorId: string, enabled: boolean): Promise<boolean>;
   getAdminSnapshot(): Promise<AdminSnapshot>;
   updateUser(actorId: string, userId: string, input: z.infer<typeof userAdminUpdateSchema>): Promise<PublicUser>;
+  searchUsers(viewerId: string, query: string): Promise<SocialUser[]>;
+  getSocialSummary(userId: string): Promise<SocialSummary>;
+  sendFriendRequest(userId: string, targetId: string): Promise<FriendRequest>;
+  respondFriendRequest(userId: string, requestId: string, action: "accept" | "decline"): Promise<FriendRequest>;
+  removeFriend(userId: string, friendId: string): Promise<void>;
+  getPrivateMessages(userId: string, friendId: string): Promise<PrivateMessage[]>;
+  sendPrivateMessage(userId: string, friendId: string, body: string): Promise<PrivateMessage>;
+  getFranchiseChat(userId: string, franchiseId: string): Promise<FranchiseChatMessage[]>;
+  sendFranchiseChatMessage(userId: string, franchiseId: string, body: string): Promise<FranchiseChatMessage>;
 };

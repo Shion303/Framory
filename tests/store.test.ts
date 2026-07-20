@@ -135,6 +135,7 @@ describe("FileStore", () => {
       imageUrl: "https://example.com/badge-test.png",
       rarity: "raro",
       category: "admin",
+      kind: "evento",
       conditionKind: "manual",
       conditionValue: null,
       ownerOnly: false
@@ -148,6 +149,7 @@ describe("FileStore", () => {
       imageUrl: "https://example.com/badge-test-editato.png",
       rarity: "epico",
       category: "community",
+      kind: "milestone",
       conditionKind: "admin_created",
       conditionValue: null,
       ownerOnly: false
@@ -179,6 +181,7 @@ describe("FileStore", () => {
       imageUrl: "https://example.com/owner.png",
       rarity: "leggendario",
       category: "admin",
+      kind: "esclusivo",
       conditionKind: "manual",
       conditionValue: null,
       ownerOnly: true
@@ -186,6 +189,58 @@ describe("FileStore", () => {
 
     await expect(store.grantBadge(owner!.id, user.id, badge.id)).rejects.toThrow("owner");
     await expect(store.grantBadge(owner!.id, owner!.id, badge.id)).resolves.toMatchObject({ userId: owner!.id, badgeId: badge.id });
+  });
+
+  it("gestisce ricerca utenti, amicizie, messaggi privati e chat franchise", async () => {
+    const store = await freshStore();
+    const owner = await store.getUserByEmail("owner-unit@framory.test");
+    const alpha = await store.createUser({
+      email: "alpha@framory.test",
+      username: "alpha",
+      displayName: "Alpha",
+      passwordHash: await hashPassword("PasswordSicura123!")
+    });
+    const beta = await store.createUser({
+      email: "beta@framory.test",
+      username: "beta",
+      displayName: "Beta",
+      passwordHash: await hashPassword("PasswordSicura123!")
+    });
+    const franchise = await store.createFranchise(
+      {
+        title: "Social Test",
+        description: "Franchise per verificare chat globale.",
+        coverImage: "",
+        bannerImage: "",
+        genres: ["Slice of Life"],
+        startYear: 2026,
+        status: "in_corso",
+        isCompleteAdaptation: false
+      },
+      owner!.id
+    );
+
+    const results = await store.searchUsers(alpha.id, "bet");
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ id: beta.id, friendship: "none" });
+
+    const request = await store.sendFriendRequest(alpha.id, beta.id);
+    expect(request).toMatchObject({ requesterId: alpha.id, addresseeId: beta.id, status: "in_attesa" });
+    await expect(store.sendPrivateMessage(alpha.id, beta.id, "prima")).rejects.toThrow("amici");
+
+    const betaSummary = await store.getSocialSummary(beta.id);
+    expect(betaSummary.incoming).toHaveLength(1);
+    await expect(store.respondFriendRequest(beta.id, request.id, "accept")).resolves.toMatchObject({ status: "accettata" });
+
+    const alphaSummary = await store.getSocialSummary(alpha.id);
+    expect(alphaSummary.friends[0]).toMatchObject({ friendId: beta.id });
+    const privateMessage = await store.sendPrivateMessage(alpha.id, beta.id, "Ciao Beta");
+    expect(privateMessage).toMatchObject({ senderId: alpha.id, receiverId: beta.id, body: "Ciao Beta" });
+    await expect(store.getPrivateMessages(beta.id, alpha.id)).resolves.toHaveLength(1);
+
+    const chatMessage = await store.sendFranchiseChatMessage(beta.id, franchise.id, "Presente nella chat globale");
+    expect(chatMessage).toMatchObject({ userId: beta.id, franchiseId: franchise.id });
+    await expect(store.getFranchiseChat(alpha.id, franchise.id)).resolves.toHaveLength(1);
   });
 
   it("importa automaticamente franchise AniList senza duplicati", async () => {

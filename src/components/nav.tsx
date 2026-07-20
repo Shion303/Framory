@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Award, Compass, Home, Library, LogIn, LogOut, Settings, Shield } from "lucide-react";
+import { Award, Compass, Home, Library, LogIn, LogOut, Settings, Shield, Users } from "lucide-react";
 import type { PublicUser } from "@/lib/types";
 import { adminRoles } from "@/lib/constants";
 import { apiJson } from "./client-utils";
@@ -40,6 +40,9 @@ export function Nav() {
           </Link>
           <Link className="btn btn-ghost" href="/badge" title="Badge">
             <Award size={18} /> Badge
+          </Link>
+          <Link className="btn btn-ghost" href="/social" title="Social">
+            <Users size={18} /> Social
           </Link>
           {user && adminRoles.includes(user.role) ? (
             <Link className="btn btn-ghost" href="/admin" title="Admin">

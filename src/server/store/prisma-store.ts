@@ -3,7 +3,9 @@ import {
   AnimeStatus as DbAnimeStatus,
   BadgeCategory as DbBadgeCategory,
   BadgeConditionKind as DbBadgeConditionKind,
+  BadgeKind as DbBadgeKind,
   BadgeRarity as DbBadgeRarity,
+  FriendRequestStatus as DbFriendRequestStatus,
   LibraryState as DbLibraryState,
   Prisma,
   PrismaClient,
@@ -19,13 +21,20 @@ import type {
   Badge,
   BadgeCategory,
   BadgeConditionKind,
+  BadgeKind,
   BadgeRarity,
   EpisodeProgress,
   Franchise,
+  FranchiseChatMessage,
   FranchiseFilters,
+  FriendRequest,
+  FriendRequestStatus,
+  Friendship,
+  FriendshipState,
   HomePayload,
   LibraryEntry,
   LibraryState,
+  PrivateMessage,
   PrivacyLevel,
   PublicUser,
   Report,
@@ -36,7 +45,7 @@ import type {
 import { clampScore, slugify } from "@/lib/format";
 import type { AniListImportCandidate } from "@/server/anilist";
 import { calculateProgress } from "@/server/progress";
-import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate } from "@/server/security";
+import { createSessionToken, hashPassword, hashSessionToken, sessionExpiryDate, verifyPassword } from "@/server/security";
 import { getPrismaClient } from "@/server/prisma";
 import {
   ANILIST_COLLECTION_TITLE,
@@ -145,6 +154,8 @@ const categoryFromDb: Record<keyof typeof DbBadgeCategory, BadgeCategory> = {
   TRACKING: "tracking",
   COLLECTION: "collezione",
   COMMUNITY: "community",
+  SOCIAL: "social",
+  EVENT: "evento",
   ADMIN: "admin"
 };
 
@@ -152,12 +163,31 @@ const categoryToDb: Record<BadgeCategory, keyof typeof DbBadgeCategory> = {
   tracking: "TRACKING",
   collezione: "COLLECTION",
   community: "COMMUNITY",
+  social: "SOCIAL",
+  evento: "EVENT",
   admin: "ADMIN"
+};
+
+const kindFromDb: Record<keyof typeof DbBadgeKind, BadgeKind> = {
+  STANDARD: "standard",
+  MILESTONE: "milestone",
+  EVENT: "evento",
+  EXCLUSIVE: "esclusivo"
+};
+
+const kindToDb: Record<BadgeKind, keyof typeof DbBadgeKind> = {
+  standard: "STANDARD",
+  milestone: "MILESTONE",
+  evento: "EVENT",
+  esclusivo: "EXCLUSIVE"
 };
 
 const conditionFromDb: Record<keyof typeof DbBadgeConditionKind, BadgeConditionKind> = {
   EPISODES_WATCHED: "episodes_watched",
   FRANCHISES_COMPLETED: "franchises_completed",
+  LIBRARY_COUNT: "library_count",
+  FAVORITES_COUNT: "favorites_count",
+  PROFILE_COMPLETED: "profile_completed",
   MANUAL: "manual",
   ADMIN_CREATED: "admin_created"
 };
@@ -165,6 +195,9 @@ const conditionFromDb: Record<keyof typeof DbBadgeConditionKind, BadgeConditionK
 const conditionToDb: Record<BadgeConditionKind, keyof typeof DbBadgeConditionKind> = {
   episodes_watched: "EPISODES_WATCHED",
   franchises_completed: "FRANCHISES_COMPLETED",
+  library_count: "LIBRARY_COUNT",
+  favorites_count: "FAVORITES_COUNT",
+  profile_completed: "PROFILE_COMPLETED",
   manual: "MANUAL",
   admin_created: "ADMIN_CREATED"
 };
@@ -190,6 +223,18 @@ const reportToDb: Record<Report["status"], keyof typeof DbReportStatus> = {
   archiviata: "DISMISSED"
 };
 
+const friendRequestFromDb: Record<keyof typeof DbFriendRequestStatus, FriendRequestStatus> = {
+  PENDING: "in_attesa",
+  ACCEPTED: "accettata",
+  DECLINED: "rifiutata"
+};
+
+const friendRequestToDb: Record<FriendRequestStatus, keyof typeof DbFriendRequestStatus> = {
+  in_attesa: "PENDING",
+  accettata: "ACCEPTED",
+  rifiutata: "DECLINED"
+};
+
 const franchiseInclude = {
   collections: { orderBy: { sortOrder: "asc" as const } },
   works: {
@@ -213,6 +258,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "comune",
     category: "tracking",
+    kind: "milestone",
     conditionKind: "episodes_watched",
     conditionValue: 1,
     ownerOnly: false
@@ -224,6 +270,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "raro",
     category: "tracking",
+    kind: "milestone",
     conditionKind: "episodes_watched",
     conditionValue: 10,
     ownerOnly: false
@@ -235,8 +282,45 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "epico",
     category: "collezione",
+    kind: "milestone",
     conditionKind: "franchises_completed",
     conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "primo-franchise",
+    name: "Primo franchise",
+    description: "Hai aggiunto il tuo primo franchise alla libreria.",
+    imageUrl: null,
+    rarity: "comune",
+    category: "collezione",
+    kind: "milestone",
+    conditionKind: "library_count",
+    conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "primo-preferito",
+    name: "Primo preferito",
+    description: "Hai segnato un franchise come preferito.",
+    imageUrl: null,
+    rarity: "raro",
+    category: "collezione",
+    kind: "standard",
+    conditionKind: "favorites_count",
+    conditionValue: 1,
+    ownerOnly: false
+  },
+  {
+    slug: "profilo-curato",
+    name: "Profilo curato",
+    description: "Hai completato bio e immagine del profilo.",
+    imageUrl: null,
+    rarity: "raro",
+    category: "community",
+    kind: "standard",
+    conditionKind: "profile_completed",
+    conditionValue: null,
     ownerOnly: false
   },
   {
@@ -246,6 +330,7 @@ const defaultBadges: Array<Omit<Badge, "id">> = [
     imageUrl: null,
     rarity: "raro",
     category: "admin",
+    kind: "esclusivo",
     conditionKind: "admin_created",
     conditionValue: 1,
     ownerOnly: false
@@ -263,6 +348,10 @@ function nullableUrl(value: string | null | undefined) {
   return value && value.trim() ? value.trim() : null;
 }
 
+function friendshipPair(userId: string, friendId: string) {
+  return [userId, friendId].sort() as [string, string];
+}
+
 export class PrismaStore implements FramoryStore {
   async ensureReady() {
     const db = await this.db();
@@ -277,6 +366,7 @@ export class PrismaStore implements FramoryStore {
           imageUrl: badge.imageUrl,
           rarity: rarityToDb[badge.rarity],
           category: categoryToDb[badge.category],
+          kind: kindToDb[badge.kind],
           conditionKind: conditionToDb[badge.conditionKind],
           conditionValue: badge.conditionValue ?? null,
           ownerOnly: badge.ownerOnly
@@ -284,11 +374,28 @@ export class PrismaStore implements FramoryStore {
       });
     }
 
-    const ownerEmail = process.env.FRAMORY_OWNER_EMAIL?.toLowerCase();
+    const ownerEmail = process.env.FRAMORY_OWNER_EMAIL?.trim().toLowerCase();
     const ownerPassword = process.env.FRAMORY_OWNER_PASSWORD;
     if (ownerEmail && ownerPassword) {
-      const ownerCount = await db.user.count({ where: { role: "OWNER" } });
-      if (ownerCount === 0) {
+      await db.user.updateMany({
+        where: { role: "OWNER", email: { not: ownerEmail } },
+        data: { role: "ADMIN" }
+      });
+      const owner = await db.user.findUnique({ where: { email: ownerEmail } });
+      if (owner) {
+        const passwordChanged = !(await verifyPassword(ownerPassword, owner.passwordHash));
+        await db.user.update({
+          where: { id: owner.id },
+          data: {
+            role: "OWNER",
+            isActive: true,
+            ...(passwordChanged ? { passwordHash: await hashPassword(ownerPassword) } : {})
+          }
+        });
+        if (passwordChanged) {
+          await db.session.deleteMany({ where: { userId: owner.id } });
+        }
+      } else {
         await db.user.create({
           data: {
             email: ownerEmail,
@@ -632,6 +739,7 @@ export class PrismaStore implements FramoryStore {
         metadata: { franchiseId }
       }
     });
+    await this.unlockAutomaticBadges(userId);
     return this.libraryEntry(row, userId);
   }
 
@@ -646,6 +754,7 @@ export class PrismaStore implements FramoryStore {
       },
       include: { franchise: { include: franchiseInclude } }
     });
+    await this.unlockAutomaticBadges(userId);
     return this.libraryEntry(row, userId);
   }
 
@@ -750,6 +859,9 @@ export class PrismaStore implements FramoryStore {
 
   async listBadges(userId?: string) {
     const db = await this.db();
+    if (userId) {
+      await this.unlockAutomaticBadges(userId);
+    }
     const [badges, userBadges] = await Promise.all([
       db.badge.findMany({ orderBy: { name: "asc" } }),
       userId ? db.userBadge.findMany({ where: { userId }, include: { badge: true } }) : []
@@ -775,6 +887,7 @@ export class PrismaStore implements FramoryStore {
         imageUrl: nullableUrl(input.imageUrl),
         rarity: rarityToDb[input.rarity],
         category: categoryToDb[input.category],
+        kind: kindToDb[input.kind ?? "standard"],
         conditionKind: conditionToDb[input.conditionKind],
         conditionValue: input.conditionValue ?? null,
         ownerOnly: input.ownerOnly ?? false
@@ -806,6 +919,7 @@ export class PrismaStore implements FramoryStore {
         ...(input.imageUrl !== undefined ? { imageUrl: nullableUrl(input.imageUrl) } : {}),
         ...(input.rarity ? { rarity: rarityToDb[input.rarity] } : {}),
         ...(input.category ? { category: categoryToDb[input.category] } : {}),
+        ...(input.kind ? { kind: kindToDb[input.kind] } : {}),
         ...(input.conditionKind ? { conditionKind: conditionToDb[input.conditionKind] } : {}),
         ...(input.conditionValue !== undefined ? { conditionValue: input.conditionValue } : {}),
         ...(input.ownerOnly !== undefined ? { ownerOnly: input.ownerOnly } : {})
@@ -876,6 +990,7 @@ export class PrismaStore implements FramoryStore {
         ...(input.activityPrivacy ? { activityPrivacy: privacyToDb[input.activityPrivacy] } : {})
       }
     });
+    await this.unlockAutomaticBadges(userId);
     return this.publicUser(user);
   }
 
@@ -989,8 +1104,221 @@ export class PrismaStore implements FramoryStore {
     return this.publicUser(user);
   }
 
+  async searchUsers(viewerId: string, query: string) {
+    const db = await this.db();
+    const needle = query.trim().toLowerCase();
+    if (needle.length < 2) {
+      return [];
+    }
+    const [users, friendships, requests] = await Promise.all([
+      db.user.findMany({ where: { isActive: true }, orderBy: { displayName: "asc" }, take: 100 }),
+      db.friendship.findMany({ where: { OR: [{ userAId: viewerId }, { userBId: viewerId }] } }),
+      db.friendRequest.findMany({
+        where: {
+          status: "PENDING",
+          OR: [{ requesterId: viewerId }, { addresseeId: viewerId }]
+        }
+      })
+    ]);
+    return users
+      .filter((user) => user.displayName.toLowerCase().includes(needle) || user.username.toLowerCase().includes(needle))
+      .slice(0, 20)
+      .map((user) => ({
+        ...this.publicUser(user),
+        friendship: this.friendshipStateFromRows(viewerId, user.id, friendships, requests)
+      }));
+  }
+
+  async getSocialSummary(userId: string) {
+    const db = await this.db();
+    const [friendships, incoming, outgoing] = await Promise.all([
+      db.friendship.findMany({
+        where: { OR: [{ userAId: userId }, { userBId: userId }] },
+        include: { userA: true, userB: true },
+        orderBy: { createdAt: "desc" }
+      }),
+      db.friendRequest.findMany({
+        where: { addresseeId: userId, status: "PENDING" },
+        include: { requester: true, addressee: true },
+        orderBy: { createdAt: "desc" }
+      }),
+      db.friendRequest.findMany({
+        where: { requesterId: userId, status: "PENDING" },
+        include: { requester: true, addressee: true },
+        orderBy: { createdAt: "desc" }
+      })
+    ]);
+    return {
+      friends: friendships.map((friendship) => this.friendship(friendship, userId)),
+      incoming: incoming.map((request) => this.friendRequest(request)),
+      outgoing: outgoing.map((request) => this.friendRequest(request))
+    };
+  }
+
+  async sendFriendRequest(userId: string, targetId: string) {
+    if (userId === targetId) {
+      throw new Error("Non puoi inviare una richiesta a te stesso.");
+    }
+    const db = await this.db();
+    const [user, target] = await Promise.all([db.user.findUnique({ where: { id: userId } }), db.user.findUnique({ where: { id: targetId } })]);
+    if (!user?.isActive || !target?.isActive) {
+      throw new Error("Utente non trovato.");
+    }
+    if (await this.areFriends(userId, targetId)) {
+      throw new Error("Siete gia amici.");
+    }
+    const reverse = await db.friendRequest.findUnique({ where: { requesterId_addresseeId: { requesterId: targetId, addresseeId: userId } } });
+    if (reverse?.status === "PENDING") {
+      return this.acceptFriendRequest(userId, reverse.id);
+    }
+    const row = await db.friendRequest.upsert({
+      where: { requesterId_addresseeId: { requesterId: userId, addresseeId: targetId } },
+      update: { status: friendRequestToDb.in_attesa },
+      create: { requesterId: userId, addresseeId: targetId },
+      include: { requester: true, addressee: true }
+    });
+    return this.friendRequest(row);
+  }
+
+  async respondFriendRequest(userId: string, requestId: string, action: "accept" | "decline") {
+    if (action === "accept") {
+      return this.acceptFriendRequest(userId, requestId);
+    }
+    const db = await this.db();
+    const existing = await db.friendRequest.findUnique({ where: { id: requestId } });
+    if (!existing || existing.addresseeId !== userId) {
+      throw new Error("Richiesta amicizia non trovata.");
+    }
+    const row = await db.friendRequest.update({
+      where: { id: requestId },
+      data: { status: friendRequestToDb.rifiutata },
+      include: { requester: true, addressee: true }
+    });
+    return this.friendRequest(row);
+  }
+
+  async removeFriend(userId: string, friendId: string) {
+    const [userAId, userBId] = friendshipPair(userId, friendId);
+    await (await this.db()).friendship.deleteMany({ where: { userAId, userBId } });
+  }
+
+  async getPrivateMessages(userId: string, friendId: string) {
+    if (!(await this.areFriends(userId, friendId))) {
+      throw new Error("Puoi leggere messaggi privati solo con gli amici.");
+    }
+    const rows = await (await this.db()).privateMessage.findMany({
+      where: {
+        OR: [
+          { senderId: userId, receiverId: friendId },
+          { senderId: friendId, receiverId: userId }
+        ]
+      },
+      include: { sender: true, receiver: true },
+      orderBy: { createdAt: "desc" },
+      take: 80
+    });
+    return rows.reverse().map((message) => this.privateMessage(message));
+  }
+
+  async sendPrivateMessage(userId: string, friendId: string, body: string) {
+    if (!(await this.areFriends(userId, friendId))) {
+      throw new Error("Puoi inviare messaggi privati solo agli amici.");
+    }
+    const text = body.trim();
+    if (!text) {
+      throw new Error("Messaggio vuoto.");
+    }
+    const row = await (await this.db()).privateMessage.create({
+      data: { senderId: userId, receiverId: friendId, body: text.slice(0, 1000) },
+      include: { sender: true, receiver: true }
+    });
+    return this.privateMessage(row);
+  }
+
+  async getFranchiseChat(_userId: string, franchiseId: string) {
+    const db = await this.db();
+    const franchise = await db.franchise.findUnique({ where: { id: franchiseId }, select: { id: true } });
+    if (!franchise) {
+      throw new Error("Franchise non trovato.");
+    }
+    const rows = await db.franchiseChatMessage.findMany({
+      where: { franchiseId },
+      include: { user: true },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+    return rows.reverse().map((message) => this.franchiseChatMessage(message));
+  }
+
+  async sendFranchiseChatMessage(userId: string, franchiseId: string, body: string) {
+    const db = await this.db();
+    const text = body.trim();
+    if (!text) {
+      throw new Error("Messaggio vuoto.");
+    }
+    const [user, franchise] = await Promise.all([
+      db.user.findUnique({ where: { id: userId }, select: { id: true, isActive: true } }),
+      db.franchise.findUnique({ where: { id: franchiseId }, select: { id: true } })
+    ]);
+    if (!user?.isActive || !franchise) {
+      throw new Error("Permesso negato.");
+    }
+    const row = await db.franchiseChatMessage.create({
+      data: { userId, franchiseId, body: text.slice(0, 1000) },
+      include: { user: true }
+    });
+    return this.franchiseChatMessage(row);
+  }
+
   private async db() {
     return (await getPrismaClient()) as DbClient;
+  }
+
+  private async areFriends(userId: string, friendId: string) {
+    const [userAId, userBId] = friendshipPair(userId, friendId);
+    return Boolean(await (await this.db()).friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } }));
+  }
+
+  private async acceptFriendRequest(userId: string, requestId: string) {
+    const db = await this.db();
+    const request = await db.friendRequest.findUnique({ where: { id: requestId } });
+    if (!request || request.addresseeId !== userId) {
+      throw new Error("Richiesta amicizia non trovata.");
+    }
+    const [userAId, userBId] = friendshipPair(request.requesterId, request.addresseeId);
+    await db.friendship.upsert({
+      where: { userAId_userBId: { userAId, userBId } },
+      update: {},
+      create: { userAId, userBId }
+    });
+    const row = await db.friendRequest.update({
+      where: { id: requestId },
+      data: { status: friendRequestToDb.accettata },
+      include: { requester: true, addressee: true }
+    });
+    return this.friendRequest(row);
+  }
+
+  private friendshipStateFromRows(
+    viewerId: string,
+    targetId: string,
+    friendships: Array<{ userAId: string; userBId: string }>,
+    requests: Array<{ requesterId: string; addresseeId: string }>
+  ): FriendshipState {
+    if (viewerId === targetId) {
+      return "self";
+    }
+    const [userAId, userBId] = friendshipPair(viewerId, targetId);
+    if (friendships.some((friendship) => friendship.userAId === userAId && friendship.userBId === userBId)) {
+      return "friends";
+    }
+    if (requests.some((request) => request.requesterId === viewerId && request.addresseeId === targetId)) {
+      return "pending_sent";
+    }
+    if (requests.some((request) => request.requesterId === targetId && request.addresseeId === viewerId)) {
+      return "pending_received";
+    }
+    return "none";
   }
 
   private async findFranchiseIdByAniListIds(db: DbClient, ids: number[]) {
@@ -1377,6 +1705,7 @@ export class PrismaStore implements FramoryStore {
     imageUrl: string | null;
     rarity: keyof typeof DbBadgeRarity;
     category: keyof typeof DbBadgeCategory;
+    kind: keyof typeof DbBadgeKind;
     conditionKind: keyof typeof DbBadgeConditionKind;
     conditionValue: number | null;
     ownerOnly: boolean;
@@ -1389,6 +1718,7 @@ export class PrismaStore implements FramoryStore {
       imageUrl: row.imageUrl,
       rarity: rarityFromDb[row.rarity],
       category: categoryFromDb[row.category],
+      kind: kindFromDb[row.kind],
       conditionKind: conditionFromDb[row.conditionKind],
       conditionValue: row.conditionValue,
       ownerOnly: row.ownerOnly
@@ -1412,6 +1742,88 @@ export class PrismaStore implements FramoryStore {
       unlockedAt: row.unlockedAt.toISOString(),
       assignedBy: row.assignedBy,
       equippedSlot: row.equippedSlot
+    };
+  }
+
+  private friendRequest(row: {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: keyof typeof DbFriendRequestStatus;
+    requester: Parameters<PrismaStore["publicUser"]>[0];
+    addressee: Parameters<PrismaStore["publicUser"]>[0];
+    createdAt: Date;
+    updatedAt: Date;
+  }): FriendRequest {
+    return {
+      id: row.id,
+      requesterId: row.requesterId,
+      addresseeId: row.addresseeId,
+      status: friendRequestFromDb[row.status],
+      requester: this.publicUser(row.requester),
+      addressee: this.publicUser(row.addressee),
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString()
+    };
+  }
+
+  private friendship(
+    row: {
+      id: string;
+      userAId: string;
+      userBId: string;
+      userA: Parameters<PrismaStore["publicUser"]>[0];
+      userB: Parameters<PrismaStore["publicUser"]>[0];
+      createdAt: Date;
+    },
+    userId: string
+  ): Friendship {
+    const friendId = row.userAId === userId ? row.userBId : row.userAId;
+    const friend = row.userAId === userId ? row.userB : row.userA;
+    return {
+      id: row.id,
+      userId,
+      friendId,
+      friend: this.publicUser(friend),
+      createdAt: row.createdAt.toISOString()
+    };
+  }
+
+  private privateMessage(row: {
+    id: string;
+    senderId: string;
+    receiverId: string;
+    body: string;
+    createdAt: Date;
+    sender: Parameters<PrismaStore["publicUser"]>[0];
+    receiver: Parameters<PrismaStore["publicUser"]>[0];
+  }): PrivateMessage {
+    return {
+      id: row.id,
+      senderId: row.senderId,
+      receiverId: row.receiverId,
+      body: row.body,
+      createdAt: row.createdAt.toISOString(),
+      sender: this.publicUser(row.sender),
+      receiver: this.publicUser(row.receiver)
+    };
+  }
+
+  private franchiseChatMessage(row: {
+    id: string;
+    franchiseId: string;
+    userId: string;
+    body: string;
+    createdAt: Date;
+    user: Parameters<PrismaStore["publicUser"]>[0];
+  }): FranchiseChatMessage {
+    return {
+      id: row.id,
+      franchiseId: row.franchiseId,
+      userId: row.userId,
+      body: row.body,
+      createdAt: row.createdAt.toISOString(),
+      user: this.publicUser(row.user)
     };
   }
 
@@ -1494,7 +1906,10 @@ export class PrismaStore implements FramoryStore {
     const db = await this.db();
     const completedEpisodes = await db.episodeProgress.count({ where: { userId, completed: true } });
     const completedFranchises = await db.libraryEntry.count({ where: { userId, state: "COMPLETED" } });
-    const user = await db.user.findUnique({ where: { id: userId }, select: { role: true } });
+    const libraryCount = await db.libraryEntry.count({ where: { userId } });
+    const favoritesCount = await db.libraryEntry.count({ where: { userId, favorite: true } });
+    const user = await db.user.findUnique({ where: { id: userId }, select: { role: true, avatarUrl: true, bannerUrl: true, bio: true } });
+    const profileCompleted = Boolean(user?.bio?.trim() && (user.avatarUrl || user.bannerUrl));
     const badges = await db.badge.findMany();
     for (const badge of badges) {
       if (badge.ownerOnly && user?.role !== "OWNER") {
@@ -1504,6 +1919,15 @@ export class PrismaStore implements FramoryStore {
         await this.unlockBadge(userId, badge.id, "system");
       }
       if (badge.conditionKind === "FRANCHISES_COMPLETED" && completedFranchises >= (badge.conditionValue ?? 0)) {
+        await this.unlockBadge(userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "LIBRARY_COUNT" && libraryCount >= (badge.conditionValue ?? 0)) {
+        await this.unlockBadge(userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "FAVORITES_COUNT" && favoritesCount >= (badge.conditionValue ?? 0)) {
+        await this.unlockBadge(userId, badge.id, "system");
+      }
+      if (badge.conditionKind === "PROFILE_COMPLETED" && profileCompleted) {
         await this.unlockBadge(userId, badge.id, "system");
       }
     }

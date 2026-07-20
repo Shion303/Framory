@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckCircle2, Library, Plus } from "lucide-react";
-import type { Franchise, LibraryEntry } from "@/lib/types";
+import { FormEvent, useEffect, useState } from "react";
+import { CheckCircle2, Library, MessageCircle, Plus, Send } from "lucide-react";
+import type { Franchise, FranchiseChatMessage, LibraryEntry } from "@/lib/types";
 import { labels } from "@/lib/constants";
 import { apiJson } from "./client-utils";
 
@@ -13,11 +13,16 @@ export function FranchiseClient({ slug }: { slug: string }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [message, setMessage] = useState("");
   const [completedOverrides, setCompletedOverrides] = useState<Record<string, boolean>>({});
+  const [chatMessages, setChatMessages] = useState<FranchiseChatMessage[]>([]);
+  const [chatText, setChatText] = useState("");
 
   useEffect(() => {
     apiJson<Payload>(`/api/franchises/${slug}`)
       .then(setPayload)
       .catch((err: Error) => setMessage(err.message));
+    apiJson<{ messages: FranchiseChatMessage[] }>(`/api/franchises/${slug}/chat`)
+      .then((result) => setChatMessages(result.messages))
+      .catch(() => setChatMessages([]));
   }, [slug]);
 
   async function addToLibrary() {
@@ -30,6 +35,7 @@ export function FranchiseClient({ slug }: { slug: string }) {
     });
     setPayload({ ...payload, library: result.entry });
     setMessage("Franchise aggiunto alla libreria.");
+    window.dispatchEvent(new Event("framory:badges-refresh"));
   }
 
   async function toggleEpisode(episodeId: string, completed: boolean) {
@@ -45,9 +51,28 @@ export function FranchiseClient({ slug }: { slug: string }) {
         delete next[episodeId];
         return next;
       });
+      window.dispatchEvent(new Event("framory:badges-refresh"));
     } catch (err) {
       setCompletedOverrides((current) => ({ ...current, [episodeId]: !completed }));
       setMessage(err instanceof Error ? err.message : "Tracking non riuscito.");
+    }
+  }
+
+  async function sendChatMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = chatText.trim();
+    if (!text) {
+      return;
+    }
+    try {
+      const result = await apiJson<{ message: FranchiseChatMessage }>(`/api/franchises/${slug}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ body: text })
+      });
+      setChatMessages((current) => [...current, result.message]);
+      setChatText("");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Messaggio non inviato.");
     }
   }
 
@@ -168,6 +193,45 @@ export function FranchiseClient({ slug }: { slug: string }) {
           </p>
         ) : null}
       </section>
+
+      <section className="card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-3">
+          <div>
+            <h2 className="text-2xl font-black text-zinc-50">Chat globale franchise</h2>
+            <p className="text-sm text-zinc-400">{franchise.title}</p>
+          </div>
+          <MessageCircle className="text-violet-300" size={22} />
+        </div>
+        <div className="mt-4 max-h-96 space-y-3 overflow-y-auto">
+          {chatMessages.length ? (
+            chatMessages.map((chatMessage) => (
+              <article className="rounded-md border border-zinc-800 bg-zinc-950 p-3" key={chatMessage.id}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-zinc-100">{chatMessage.user.displayName}</p>
+                  <time className="text-xs text-zinc-500" dateTime={chatMessage.createdAt}>
+                    {formatChatTime(chatMessage.createdAt)}
+                  </time>
+                </div>
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-300">{chatMessage.body}</p>
+              </article>
+            ))
+          ) : (
+            <p className="rounded-md bg-zinc-950 p-4 text-sm text-zinc-400">Nessun messaggio nel franchise.</p>
+          )}
+        </div>
+        <form className="mt-4 flex gap-2 border-t border-zinc-800 pt-4" onSubmit={sendChatMessage}>
+          <input
+            className="control min-w-0 flex-1"
+            maxLength={1000}
+            onChange={(event) => setChatText(event.target.value)}
+            placeholder="Scrivi nella chat del franchise"
+            value={chatText}
+          />
+          <button className="btn btn-primary" title="Invia" type="submit">
+            <Send size={18} />
+          </button>
+        </form>
+      </section>
     </div>
   );
 }
@@ -238,4 +302,8 @@ function countEpisodes(works: Work[]) {
     (total, work) => total + work.seasons.reduce((seasonTotal, season) => seasonTotal + season.episodes.length, 0),
     0
   );
+}
+
+function formatChatTime(value: string) {
+  return new Date(value).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
 }

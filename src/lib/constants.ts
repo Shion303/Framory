@@ -1,4 +1,4 @@
-import type { AnimeStatus, BadgeCategory, BadgeConditionKind, BadgeRarity, LibraryState, PrivacyLevel, Role, WorkFormat } from "./types";
+import type { AnimeStatus, BadgeCategory, BadgeConditionKind, BadgeKind, BadgeRarity, LibraryState, PrivacyLevel, Role, WorkFormat } from "./types";
 
 export const roles: Role[] = ["owner", "admin", "moderator", "user"];
 export const adminRoles: Role[] = ["owner", "admin"];
@@ -8,8 +8,17 @@ export const animeStatuses: AnimeStatus[] = ["annunciato", "in_corso", "concluso
 export const workFormats: WorkFormat[] = ["tv", "film", "ova", "ona", "special"];
 export const privacyLevels: PrivacyLevel[] = ["pubblico", "follower", "privato"];
 export const badgeRarities: BadgeRarity[] = ["comune", "raro", "epico", "leggendario"];
-export const badgeCategories: BadgeCategory[] = ["tracking", "collezione", "community", "admin"];
-export const badgeConditionKinds: BadgeConditionKind[] = ["episodes_watched", "franchises_completed", "manual", "admin_created"];
+export const badgeCategories: BadgeCategory[] = ["tracking", "collezione", "community", "social", "evento", "admin"];
+export const badgeKinds: BadgeKind[] = ["standard", "milestone", "evento", "esclusivo"];
+export const badgeConditionKinds: BadgeConditionKind[] = [
+  "episodes_watched",
+  "franchises_completed",
+  "library_count",
+  "favorites_count",
+  "profile_completed",
+  "manual",
+  "admin_created"
+];
 
 export const SESSION_COOKIE = "framory_session";
 
@@ -55,11 +64,22 @@ export const labels = {
     tracking: "Tracking",
     collezione: "Collezione",
     community: "Community",
+    social: "Social",
+    evento: "Evento",
     admin: "Admin"
+  },
+  badgeKind: {
+    standard: "Standard",
+    milestone: "Milestone",
+    evento: "Evento",
+    esclusivo: "Esclusivo"
   },
   badgeCondition: {
     episodes_watched: "Episodi visti",
     franchises_completed: "Franchise completati",
+    library_count: "Franchise in libreria",
+    favorites_count: "Preferiti",
+    profile_completed: "Profilo completato",
     manual: "Manuale",
     admin_created: "Creato da admin"
   }

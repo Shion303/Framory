@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Plus, Search } from "lucide-react";
 import type { Franchise } from "@/lib/types";
 import { animeStatuses, labels } from "@/lib/constants";
@@ -20,9 +20,11 @@ type Result = {
 };
 
 export function DiscoveryClient() {
+  const formRef = useRef<HTMLFormElement>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [ready, setReady] = useState(false);
 
   async function load(params = "") {
     const payload = await apiJson<Result>(`/api/franchises${params}`);
@@ -37,12 +39,17 @@ export function DiscoveryClient() {
   }
 
   useEffect(() => {
+    setReady(true);
     load("?sort=recent").catch((err: Error) => setMessage(err.message));
   }, []);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
+  async function submit(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const formElement = event?.currentTarget ?? formRef.current;
+    if (!formElement) {
+      return;
+    }
+    const form = new FormData(formElement);
     const params = new URLSearchParams();
     for (const key of ["query", "genre", "year", "status", "sort"]) {
       const value = String(form.get(key) ?? "");
@@ -67,7 +74,7 @@ export function DiscoveryClient() {
     <div className="space-y-6">
       <section className="rounded-lg border border-zinc-800 bg-black/70 p-6">
         <h1 className="text-3xl font-black">Discovery</h1>
-        <form className="mt-5 grid gap-3 md:grid-cols-[1fr_0.7fr_0.4fr_0.5fr_0.5fr_auto]" onSubmit={submit}>
+        <form className="mt-5 grid gap-3 md:grid-cols-[1fr_0.7fr_0.4fr_0.5fr_0.5fr_auto]" onSubmit={submit} ref={formRef}>
           <input
             className="control"
             name="query"
@@ -91,7 +98,7 @@ export function DiscoveryClient() {
             <option value="year">Anno</option>
             <option value="works">Opere</option>
           </select>
-          <button className="btn btn-primary" type="submit">
+          <button className="btn btn-primary" data-ready={ready ? "true" : "false"} onClick={() => void submit()} type="button">
             <Search size={18} /> Cerca
           </button>
         </form>

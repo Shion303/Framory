@@ -33,7 +33,7 @@ export function HomeClient() {
             {home.user ? `Bentornato, ${home.user.displayName}` : "Organizza ogni anime dal franchise all'episodio"}
           </h1>
           <p className="mt-4 max-w-2xl text-zinc-300">
-            Discovery, libreria, tracking e badge in un solo spazio scuro, rapido e pensato solo per anime.
+            Tutto il tuo mondo anime. Un solo posto per scoprirlo, seguirlo e completarlo.
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link className="btn btn-primary" href="/scopri">
@@ -56,17 +56,20 @@ export function HomeClient() {
         <div className="card p-5 lg:col-span-1">
           <h2 className="text-xl font-black">Continua a guardare</h2>
           {home.nextEpisode ? (
-            <div className="mt-4 space-y-2 text-zinc-300">
-              <p className="text-lg font-bold text-zinc-50">{home.nextEpisode.franchise.title}</p>
-              <p>
-                {home.nextEpisode.work.title} - {home.nextEpisode.season.title}
-              </p>
-              <p>
-                Episodio {home.nextEpisode.episode.number}: {home.nextEpisode.episode.title}
-              </p>
-              <Link className="btn btn-primary mt-2" href={`/franchise/${home.nextEpisode.franchise.slug}`}>
-                Apri episodio
-              </Link>
+            <div className="mt-4 flex gap-3 text-zinc-300">
+              <CoverImage imageUrl={home.nextEpisode.franchise.coverImage} title={home.nextEpisode.franchise.title} />
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="text-lg font-bold text-zinc-50">{home.nextEpisode.franchise.title}</p>
+                <p>
+                  {home.nextEpisode.work.title} - {home.nextEpisode.season.title}
+                </p>
+                <p>
+                  Episodio {home.nextEpisode.episode.number}: {home.nextEpisode.episode.title}
+                </p>
+                <Link className="btn btn-primary mt-2" href={`/franchise/${home.nextEpisode.franchise.slug}`}>
+                  Apri episodio
+                </Link>
+              </div>
             </div>
           ) : (
             <p className="mt-4 text-zinc-400">Nessun prossimo episodio disponibile.</p>
@@ -115,12 +118,15 @@ function List({ title, items }: { title: string; items: HomePayload["trending"] 
         {items.length ? (
           items.map((franchise) => (
             <Link
-              className="block rounded-md border border-zinc-800 bg-zinc-950 p-3 hover:border-violet-400"
+              className="flex min-h-24 gap-3 rounded-md border border-zinc-800 bg-zinc-950 p-3 hover:border-violet-400"
               href={`/franchise/${franchise.slug}`}
               key={franchise.id}
             >
-              <p className="font-bold text-zinc-50">{franchise.title}</p>
-              <p className="text-sm text-zinc-400">{franchise.genres.slice(0, 3).join(", ") || "Anime"}</p>
+              <CoverImage imageUrl={coverFor(franchise)} title={franchise.title} />
+              <span className="min-w-0 flex-1 self-center">
+                <span className="block text-zinc-50">{franchise.title}</span>
+                <span className="mt-1 block text-sm text-zinc-400">{franchise.genres.slice(0, 3).join(", ") || "Anime"}</span>
+              </span>
             </Link>
           ))
         ) : (
@@ -129,4 +135,21 @@ function List({ title, items }: { title: string; items: HomePayload["trending"] 
       </div>
     </div>
   );
+}
+
+function CoverImage({ imageUrl, title }: { imageUrl?: string | null; title: string }) {
+  return (
+    <span className="block aspect-[2/3] w-14 shrink-0 overflow-hidden rounded-md bg-black sm:w-16">
+      {imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img alt={`Copertina ${title}`} className="h-full w-full object-cover" src={imageUrl} />
+      ) : (
+        <span className="grid h-full w-full place-items-center px-1 text-center text-xs text-zinc-500">Framory</span>
+      )}
+    </span>
+  );
+}
+
+function coverFor(franchise: HomePayload["trending"][number]) {
+  return franchise.coverImage ?? franchise.works.find((work) => work.coverImage)?.coverImage ?? null;
 }

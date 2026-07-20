@@ -1,19 +1,30 @@
 import { z } from "zod";
-import { animeStatuses, badgeCategories, badgeConditionKinds, badgeRarities, libraryStates, privacyLevels, roles, workFormats } from "./constants";
+import {
+  animeStatuses,
+  badgeCategories,
+  badgeConditionKinds,
+  badgeKinds,
+  badgeRarities,
+  libraryStates,
+  privacyLevels,
+  roles,
+  workFormats
+} from "./constants";
 
 export const registerSchema = z.object({
-  email: z.string().email().max(160),
+  email: z.string().trim().toLowerCase().email().max(160),
   username: z
     .string()
+    .trim()
     .min(3)
     .max(32)
     .regex(/^[a-zA-Z0-9_]+$/, "Usa solo lettere, numeri e underscore"),
-  displayName: z.string().min(2).max(80),
+  displayName: z.string().trim().min(2).max(80),
   password: z.string().min(10).max(200)
 });
 
 export const loginSchema = z.object({
-  email: z.string().email().max(160),
+  email: z.string().trim().toLowerCase().email().max(160),
   password: z.string().min(1).max(200)
 });
 
@@ -107,6 +118,7 @@ const badgeBaseSchema = z.object({
   imageUrl: z.string().url().optional().nullable().or(z.literal("")),
   rarity: z.enum(badgeRarities),
   category: z.enum(badgeCategories),
+  kind: z.enum(badgeKinds).default("standard"),
   conditionKind: z.enum(badgeConditionKinds),
   conditionValue: z.number().int().min(0).max(100000).nullable().optional(),
   ownerOnly: z.boolean().default(false)
@@ -114,7 +126,8 @@ const badgeBaseSchema = z.object({
 
 export const badgeSchema = badgeBaseSchema
   .superRefine((input, ctx) => {
-    if ((input.conditionKind === "episodes_watched" || input.conditionKind === "franchises_completed") && input.conditionValue == null) {
+    const needsThreshold = ["episodes_watched", "franchises_completed", "library_count", "favorites_count"].includes(input.conditionKind);
+    if (needsThreshold && input.conditionValue == null) {
       ctx.addIssue({
         code: "custom",
         path: ["conditionValue"],
@@ -124,7 +137,8 @@ export const badgeSchema = badgeBaseSchema
   });
 
 export const badgeUpdateSchema = badgeBaseSchema.partial().superRefine((input, ctx) => {
-  if ((input.conditionKind === "episodes_watched" || input.conditionKind === "franchises_completed") && input.conditionValue == null) {
+  const needsThreshold = input.conditionKind ? ["episodes_watched", "franchises_completed", "library_count", "favorites_count"].includes(input.conditionKind) : false;
+  if (needsThreshold && input.conditionValue == null) {
     ctx.addIssue({
       code: "custom",
       path: ["conditionValue"],

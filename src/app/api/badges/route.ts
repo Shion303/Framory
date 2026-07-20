@@ -5,7 +5,14 @@ import { getStore } from "@/server/store";
 export async function GET() {
   try {
     const user = await getCurrentUser();
-    return jsonOk(await getStore().listBadges(user?.id));
+    if (!user) {
+      return jsonOk({ badges: [], userBadges: [] });
+    }
+    const payload = await getStore().listBadges(user.id);
+    return jsonOk({
+      badges: payload.userBadges.map((userBadge) => userBadge.badge).sort((a, b) => a.name.localeCompare(b.name, "it")),
+      userBadges: payload.userBadges
+    });
   } catch (error) {
     return jsonError(error);
   }

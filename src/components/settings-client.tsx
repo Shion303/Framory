@@ -35,6 +35,7 @@ export function SettingsClient() {
       });
       setUser(payload.user);
       setMessage("Impostazioni salvate.");
+      window.dispatchEvent(new Event("framory:badges-refresh"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Salvataggio non riuscito.");
     }

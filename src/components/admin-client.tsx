@@ -2,8 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { BadgePlus, Download, Plus, RefreshCw, Save, Search, ShieldCheck, Trash2 } from "lucide-react";
-import type { Badge, BadgeCategory, BadgeConditionKind, BadgeRarity, Franchise, PublicUser, Report } from "@/lib/types";
-import { badgeCategories, badgeConditionKinds, badgeRarities, labels, roles } from "@/lib/constants";
+import type { Badge, BadgeCategory, BadgeConditionKind, BadgeKind, BadgeRarity, Franchise, PublicUser, Report } from "@/lib/types";
+import { badgeCategories, badgeConditionKinds, badgeKinds, badgeRarities, labels, roles } from "@/lib/constants";
 import { apiJson, formNumber } from "./client-utils";
 
 type Snapshot = {
@@ -38,6 +38,7 @@ type BadgePayload = {
   imageUrl: string | null;
   rarity: BadgeRarity;
   category: BadgeCategory;
+  kind: BadgeKind;
   conditionKind: BadgeConditionKind;
   conditionValue: number | null;
   ownerOnly: boolean;
@@ -47,6 +48,8 @@ export function AdminClient() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [message, setMessage] = useState("");
   const [aniListResults, setAniListResults] = useState<AniListResult[]>([]);
+  const [badgeUserQuery, setBadgeUserQuery] = useState("");
+  const [selectedBadgeUserId, setSelectedBadgeUserId] = useState("");
   const [maintenanceMode, setMaintenanceModeState] = useState(false);
 
   async function load() {
@@ -94,7 +97,8 @@ export function AdminClient() {
 
   async function submitBadge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     await mutate(
       "/api/admin/badges",
       {
@@ -104,13 +108,14 @@ export function AdminClient() {
         imageUrl: String(form.get("imageUrl") ?? "") || null,
         rarity: String(form.get("rarity")),
         category: String(form.get("category")),
+        kind: String(form.get("kind")),
         conditionKind: String(form.get("conditionKind")),
         conditionValue: formNumber(form.get("conditionValue")),
         ownerOnly: form.get("ownerOnly") === "on"
       },
       "Badge creato."
     );
-    event.currentTarget.reset();
+    formElement.reset();
   }
 
   async function saveBadge(badgeId: string, patch: BadgePayload) {
@@ -171,11 +176,15 @@ export function AdminClient() {
 
   async function grantBadge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedBadgeUserId) {
+      setMessage("Seleziona un utente dalla ricerca.");
+      return;
+    }
     const form = new FormData(event.currentTarget);
     await mutate(
       "/api/admin/badges/grant",
       {
-        userId: String(form.get("userId")),
+        userId: selectedBadgeUserId,
         badgeId: String(form.get("badgeId"))
       },
       "Badge assegnato."
@@ -185,6 +194,17 @@ export function AdminClient() {
   if (!snapshot) {
     return <p className="card p-4 text-zinc-300">{message || "Caricamento Admin..."}</p>;
   }
+
+  const selectedBadgeUser = snapshot.users.find((user) => user.id === selectedBadgeUserId);
+  const badgeUserNeedle = badgeUserQuery.trim().toLowerCase();
+  const badgeUserResults =
+    badgeUserNeedle.length >= 2
+      ? snapshot.users
+          .filter((user) =>
+            [user.displayName, user.username, user.email ?? ""].some((value) => value.toLowerCase().includes(badgeUserNeedle))
+          )
+          .slice(0, 8)
+      : [];
 
   return (
     <div className="space-y-6">
@@ -253,13 +273,49 @@ export function AdminClient() {
       <section className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
         <Panel title="Badge manuali">
           <form className="space-y-3" onSubmit={grantBadge}>
-            <select className="control" name="userId">
-              {snapshot.users.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.displayName}
-                </option>
-              ))}
-            </select>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  className="control min-w-0 flex-1"
+                  onChange={(event) => {
+                    setBadgeUserQuery(event.target.value);
+                    setSelectedBadgeUserId("");
+                  }}
+                  placeholder="Cerca utente"
+                  value={badgeUserQuery}
+                />
+                <Search className="mt-3 text-zinc-400" size={18} />
+              </div>
+              {selectedBadgeUser ? (
+                <div className="rounded-md border border-violet-500 bg-violet-950/35 p-3 text-sm">
+                  <p className="text-zinc-50">{selectedBadgeUser.displayName}</p>
+                  <p className="text-zinc-400">@{selectedBadgeUser.username}</p>
+                </div>
+              ) : badgeUserNeedle.length >= 2 ? (
+                <div className="space-y-2">
+                  {badgeUserResults.length ? (
+                    badgeUserResults.map((user) => (
+                      <button
+                        className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-3 text-left text-sm hover:border-violet-400"
+                        key={user.id}
+                        onClick={() => {
+                          setSelectedBadgeUserId(user.id);
+                          setBadgeUserQuery(user.displayName);
+                        }}
+                        type="button"
+                      >
+                        <span className="block text-zinc-50">{user.displayName}</span>
+                        <span className="text-zinc-400">@{user.username}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="rounded-md bg-zinc-950 p-3 text-sm text-zinc-400">Nessun utente trovato.</p>
+                  )}
+                </div>
+              ) : (
+                <p className="rounded-md bg-zinc-950 p-3 text-sm text-zinc-400">Cerca e seleziona un utente.</p>
+              )}
+            </div>
             <select className="control" name="badgeId">
               {snapshot.badges.map((badge) => (
                 <option key={badge.id} value={badge.id}>
@@ -349,7 +405,7 @@ export function AdminClient() {
 
 function BadgeFields({ value, onChange }: { value?: BadgePayload; onChange?: (patch: Partial<BadgePayload>) => void }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-5">
       <select
         className="control"
         name="rarity"
@@ -383,6 +439,18 @@ function BadgeFields({ value, onChange }: { value?: BadgePayload; onChange?: (pa
         {badgeConditionKinds.map((condition) => (
           <option key={condition} value={condition}>
             {labels.badgeCondition[condition]}
+          </option>
+        ))}
+      </select>
+      <select
+        className="control"
+        name="kind"
+        onChange={(event) => onChange?.({ kind: event.target.value as BadgeKind })}
+        {...(value ? { value: value.kind } : { defaultValue: "standard" })}
+      >
+        {badgeKinds.map((kind) => (
+          <option key={kind} value={kind}>
+            {labels.badgeKind[kind]}
           </option>
         ))}
       </select>
@@ -469,6 +537,7 @@ function badgeToPayload(badge: Badge): BadgePayload {
     imageUrl: badge.imageUrl ?? null,
     rarity: badge.rarity,
     category: badge.category,
+    kind: badge.kind,
     conditionKind: badge.conditionKind,
     conditionValue: badge.conditionValue ?? null,
     ownerOnly: badge.ownerOnly
