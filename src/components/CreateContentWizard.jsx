@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { X, Upload, Plus, Trash2, Save, ChevronLeft, ChevronRight, ImagePlus, Film, Tv, Sparkles, Check } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { X, Upload, Plus, Trash2, Save, ChevronLeft, ChevronRight, ImagePlus, Check } from "lucide-react";
+import { entities, uploadFile } from "@/lib/api";
 import { TYPE_META } from "@/components/TypeBadge";
 
 const STEPS = [
@@ -13,7 +13,7 @@ const STEPS = [
   { key: "save", label: "Save" },
 ];
 
-function Field({ label, children, hint }) {
+function Field({ label, children, hint = undefined }) {
   return (
     <div>
       <label className="text-xs font-medium text-muted-foreground mb-1.5 block">{label}</label>
@@ -62,7 +62,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
     if (!file) return;
     setUploadingField(field);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await uploadFile(file);
       patch({ [field]: file_url });
     } catch (e) {
       alert("Upload failed: " + (e.message || "error"));
@@ -75,7 +75,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
     if (!file) return;
     setUploadingField(`season-${idx}`);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await uploadFile(file);
       setForm((f) => {
         const seasons = [...f.seasons];
         seasons[idx] = { ...seasons[idx], poster_url: file_url };
@@ -92,7 +92,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
     if (!file) return;
     setUploadingField(`ep-${sIdx}-${eIdx}`);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await uploadFile(file);
       setForm((f) => {
         const seasons = [...f.seasons];
         const episodes = [...seasons[sIdx].episodes];
@@ -140,7 +140,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
     setSaving(true);
     try {
       const genres = form.genres.split(",").map((g) => g.trim()).filter(Boolean);
-      const content = await base44.entities.Content.create({
+      const content = await entities.Content.create({
         title: form.title.trim(),
         original_title: form.original_title.trim(),
         summary: form.summary.trim(),
@@ -164,7 +164,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
       // Seasons + episodes
       if (isEpisodic) {
         for (const se of form.seasons) {
-          const season = await base44.entities.Season.create({
+          await entities.Season.create({
             content_id: content.id,
             season_number: se.number,
             title: se.title.trim(),
@@ -173,7 +173,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
             source: "MANUAL",
           });
           if (se.episodes.length > 0) {
-            await base44.entities.Episode.bulkCreate(
+            await entities.Episode.bulkCreate(
               se.episodes.map((e) => ({
                 content_id: content.id,
                 season_number: se.number,
@@ -191,7 +191,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
       }
 
       // Library item
-      await base44.entities.LibraryItem.create({
+      await entities.LibraryItem.create({
         content_id: content.id,
         title: content.title,
         poster_url: content.poster_url,
@@ -205,7 +205,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
       if (form.franchiseMode === "existing" && form.franchiseId) {
         franchiseId = form.franchiseId;
       } else if (form.franchiseMode === "new" && form.newFranchiseName.trim()) {
-        const fr = await base44.entities.Franchise.create({
+        const fr = await entities.Franchise.create({
           name: form.newFranchiseName.trim(),
           description: "",
           poster_url: content.backdrop_url || content.poster_url,
@@ -213,7 +213,7 @@ export function CreateContentWizard({ open, onClose, onCreated, franchises = [] 
         franchiseId = fr.id;
       }
       if (franchiseId) {
-        await base44.entities.FranchiseContent.create({
+        await entities.FranchiseContent.create({
           franchise_id: franchiseId,
           content_id: content.id,
           title: content.title,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 import {
   loadLibraryItems,
   loadAllSeasonsGrouped,
@@ -51,7 +51,7 @@ export function useTrophies() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await base44.entities.Trophy.list("-created_date", 500);
+      const list = await entities.Trophy.list("-created_date", 500);
       setTrophies(list);
     } catch (e) {
       setTrophies([]);
@@ -73,8 +73,8 @@ export function useFranchises() {
     setLoading(true);
     try {
       const [f, l] = await Promise.all([
-        base44.entities.Franchise.list("-created_date", 200),
-        base44.entities.FranchiseContent.list("-created_date", 1000),
+        entities.Franchise.list("-created_date", 200),
+        entities.FranchiseContent.list("-created_date", 1000),
       ]);
       setFranchises(f);
       setLinks(l);

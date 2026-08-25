@@ -1,0 +1,16 @@
+{
+  "name": "Framory",
+  "short_name": "Framory",
+  "description": "Personal TV, anime, and film tracker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b12",
+  "theme_color": "#a855f7",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

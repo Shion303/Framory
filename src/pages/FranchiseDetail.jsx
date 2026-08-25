@@ -3,10 +3,10 @@ import { useParams, Link } from "react-router-dom";
 import { ArrowLeft, Layers, Plus, Trash2, CheckCircle2, Trophy } from "lucide-react";
 import Layout from "@/components/Layout";
 import { Poster } from "@/components/Poster";
-import { Loading, ErrorState, EmptyState, ProgressBar } from "@/components/States";
+import { Loading, EmptyState, ProgressBar } from "@/components/States";
 import { useFranchises, useLibraryData } from "@/lib/useFramoryData";
 import { franchiseProgress } from "@/lib/tracking";
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 
 export default function FranchiseDetail() {
   const { id } = useParams();
@@ -42,14 +42,14 @@ export default function FranchiseDetail() {
   const fp = franchiseProgress(contentLinks, seasonsByContent, progressByContent);
 
   async function removeContent(linkId) {
-    await base44.entities.FranchiseContent.delete(linkId);
+    await entities.FranchiseContent.delete(linkId);
     reload();
   }
 
   async function deleteFranchise() {
     if (!window.confirm(`Delete franchise "${franchise.name}"? This won't affect the series inside.`)) return;
-    for (const l of contentLinks) await base44.entities.FranchiseContent.delete(l.id);
-    await base44.entities.Franchise.delete(franchise.id);
+    for (const l of contentLinks) await entities.FranchiseContent.delete(l.id);
+    await entities.Franchise.delete(franchise.id);
     window.location.href = "/";
   }
 

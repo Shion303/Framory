@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { X, Search, GitMerge, ArrowRight, AlertTriangle, Check } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 import { mergeContents } from "@/lib/merge";
 import { TypeBadge, CONTENT_TYPES, TYPE_META } from "@/components/TypeBadge";
 import { Poster } from "@/components/Poster";
@@ -14,7 +14,7 @@ function ContentPicker({ label, selected, onSelect, excludeId }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    base44.entities.Content.list("-created_date", 1000).then((c) => { setAll(c); setLoading(false); }).catch(() => setLoading(false));
+    entities.Content.list("-created_date", 1000).then((c) => { setAll(c); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
   const filtered = useMemo(() => {

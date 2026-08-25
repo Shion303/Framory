@@ -2,14 +2,14 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Play, Trophy as TrophyIcon, Sparkles, CheckCircle2, Flame, Clock, Layers } from "lucide-react";
 import Layout from "@/components/Layout";
-import { ContentRow, ContentCard } from "@/components/ContentCard";
-import { Loading, ErrorState, EmptyState, ProgressBar } from "@/components/States";
+import { ContentCard } from "@/components/ContentCard";
+import { Loading, ErrorState, ProgressBar } from "@/components/States";
 import { useLibraryData, useTrophies, useFranchises } from "@/lib/useFramoryData";
 import { contentProgress } from "@/lib/tracking";
 import { getShowDetail } from "@/lib/tvmaze";
 import { autoSyncIfNeeded } from "@/lib/sync";
 
-function SectionHeader({ title, icon: Icon, to }) {
+function SectionHeader({ title, icon: Icon, to = undefined }) {
   return (
     <div className="flex items-center justify-between mb-3 px-4 sm:px-6">
       <h2 className="text-lg font-semibold flex items-center gap-2">

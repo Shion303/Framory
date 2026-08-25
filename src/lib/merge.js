@@ -1,91 +1,91 @@
 // Merge engine — combines two content records into one without losing user data.
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 
 // Merge `secondaryId` into `primaryId`. The primary record is kept as the definitive reference.
 export async function mergeContents(primaryId, secondaryId) {
   if (primaryId === secondaryId) throw new Error("Cannot merge a content with itself.");
 
   const [primary, secondary] = await Promise.all([
-    base44.entities.Content.get(primaryId),
-    base44.entities.Content.get(secondaryId),
+    entities.Content.get(primaryId),
+    entities.Content.get(secondaryId),
   ]);
   if (!primary || !secondary) throw new Error("One or both contents not found.");
 
   // 1. EpisodeProgress — move secondary's progress to primary, dedupe by (season, episode).
   const [primaryProgress, secondaryProgress] = await Promise.all([
-    base44.entities.EpisodeProgress.filter({ content_id: secondaryId }), // secondary's
-    base44.entities.EpisodeProgress.filter({ content_id: primaryId }),
+    entities.EpisodeProgress.filter({ content_id: secondaryId }), // secondary's
+    entities.EpisodeProgress.filter({ content_id: primaryId }),
   ]);
   const primaryKeys = new Set(primaryProgress.map((p) => `${p.season_number}-${p.episode_number}`));
   for (const p of secondaryProgress) {
     const key = `${p.season_number}-${p.episode_number}`;
     if (primaryKeys.has(key)) {
       // duplicate episode — drop secondary's record, keep primary's watched state
-      await base44.entities.EpisodeProgress.delete(p.id);
+      await entities.EpisodeProgress.delete(p.id);
     } else {
-      await base44.entities.EpisodeProgress.update(p.id, { content_id: primaryId });
+      await entities.EpisodeProgress.update(p.id, { content_id: primaryId });
       primaryKeys.add(key);
     }
   }
 
   // 2. Seasons — move secondary's seasons to primary, dedupe by season_number.
   const [primarySeasons, secondarySeasons] = await Promise.all([
-    base44.entities.Season.filter({ content_id: primaryId }),
-    base44.entities.Season.filter({ content_id: secondaryId }),
+    entities.Season.filter({ content_id: primaryId }),
+    entities.Season.filter({ content_id: secondaryId }),
   ]);
   const primarySeasonNumbers = new Set(primarySeasons.map((s) => s.season_number));
   for (const s of secondarySeasons) {
     if (primarySeasonNumbers.has(s.season_number)) {
-      await base44.entities.Season.delete(s.id);
+      await entities.Season.delete(s.id);
     } else {
-      await base44.entities.Season.update(s.id, { content_id: primaryId });
+      await entities.Season.update(s.id, { content_id: primaryId });
       primarySeasonNumbers.add(s.season_number);
     }
   }
 
   // 3. Episodes (manual) — move secondary's stored episodes to primary, dedupe.
   const [primaryEps, secondaryEps] = await Promise.all([
-    base44.entities.Episode.filter({ content_id: primaryId }),
-    base44.entities.Episode.filter({ content_id: secondaryId }),
+    entities.Episode.filter({ content_id: primaryId }),
+    entities.Episode.filter({ content_id: secondaryId }),
   ]);
   const primaryEpKeys = new Set(primaryEps.map((e) => `${e.season_number}-${e.episode_number}`));
   for (const e of secondaryEps) {
     const key = `${e.season_number}-${e.episode_number}`;
     if (primaryEpKeys.has(key)) {
-      await base44.entities.Episode.delete(e.id);
+      await entities.Episode.delete(e.id);
     } else {
-      await base44.entities.Episode.update(e.id, { content_id: primaryId });
+      await entities.Episode.update(e.id, { content_id: primaryId });
       primaryEpKeys.add(key);
     }
   }
 
   // 4. LibraryItem — keep primary's; if only secondary has one, reassign it.
   const [primaryLib, secondaryLib] = await Promise.all([
-    base44.entities.LibraryItem.filter({ content_id: primaryId }),
-    base44.entities.LibraryItem.filter({ content_id: secondaryId }),
+    entities.LibraryItem.filter({ content_id: primaryId }),
+    entities.LibraryItem.filter({ content_id: secondaryId }),
   ]);
   if (primaryLib.length === 0 && secondaryLib.length > 0) {
-    await base44.entities.LibraryItem.update(secondaryLib[0].id, {
+    await entities.LibraryItem.update(secondaryLib[0].id, {
       content_id: primaryId,
       title: primary.title,
       poster_url: primary.poster_url || secondaryLib[0].poster_url,
       content_type: primary.content_type,
     });
   } else if (secondaryLib.length > 0) {
-    await base44.entities.LibraryItem.delete(secondaryLib[0].id);
+    await entities.LibraryItem.delete(secondaryLib[0].id);
   }
 
   // 5. FranchiseContent — move secondary's links to primary, dedupe by franchise_id.
   const [primaryLinks, secondaryLinks] = await Promise.all([
-    base44.entities.FranchiseContent.filter({ content_id: primaryId }),
-    base44.entities.FranchiseContent.filter({ content_id: secondaryId }),
+    entities.FranchiseContent.filter({ content_id: primaryId }),
+    entities.FranchiseContent.filter({ content_id: secondaryId }),
   ]);
   const primaryFranchiseIds = new Set(primaryLinks.map((l) => l.franchise_id));
   for (const l of secondaryLinks) {
     if (primaryFranchiseIds.has(l.franchise_id)) {
-      await base44.entities.FranchiseContent.delete(l.id);
+      await entities.FranchiseContent.delete(l.id);
     } else {
-      await base44.entities.FranchiseContent.update(l.id, {
+      await entities.FranchiseContent.update(l.id, {
         content_id: primaryId,
         title: primary.title,
         poster_url: primary.poster_url || l.poster_url,
@@ -95,9 +95,9 @@ export async function mergeContents(primaryId, secondaryId) {
   }
 
   // 6. Trophies — repoint any trophy tied to the secondary content to the primary.
-  const secondaryTrophies = await base44.entities.Trophy.filter({ condition_content_id: secondaryId });
+  const secondaryTrophies = await entities.Trophy.filter({ condition_content_id: secondaryId });
   for (const t of secondaryTrophies) {
-    await base44.entities.Trophy.update(t.id, {
+    await entities.Trophy.update(t.id, {
       condition_content_id: primaryId,
       condition_content_title: primary.title,
     });
@@ -119,13 +119,13 @@ export async function mergeContents(primaryId, secondaryId) {
     fill.total_episodes = secondary.total_episodes;
   if ((!primary.total_seasons || primary.total_seasons === 0) && secondary.total_seasons)
     fill.total_seasons = secondary.total_seasons;
-  if (Object.keys(fill).length > 0) await base44.entities.Content.update(primaryId, fill);
+  if (Object.keys(fill).length > 0) await entities.Content.update(primaryId, fill);
 
   // 8. Delete the secondary content record.
-  await base44.entities.Content.delete(secondaryId);
+  await entities.Content.delete(secondaryId);
 
   // 9. Record merge history.
-  await base44.entities.MergeHistory.create({
+  await entities.MergeHistory.create({
     primary_content_id: primaryId,
     primary_title: primary.title,
     merged_content_ids: [secondaryId],
@@ -137,5 +137,5 @@ export async function mergeContents(primaryId, secondaryId) {
 }
 
 export async function getMergeHistory() {
-  return await base44.entities.MergeHistory.list("-created_date", 100);
+  return await entities.MergeHistory.list("-created_date", 100);
 }

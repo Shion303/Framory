@@ -6,7 +6,7 @@ import { Poster } from "@/components/Poster";
 import { Loading, ErrorState, EmptyState, ProgressBar } from "@/components/States";
 import { SeasonBlock } from "@/components/SeasonBlock";
 import { TrophyUnlockModal } from "@/components/TrophyUnlockModal";
-import { TypeBadge, TYPE_META } from "@/components/TypeBadge";
+import { TypeBadge } from "@/components/TypeBadge";
 import { getShowDetail } from "@/lib/tvmaze";
 import {
   ensureContentPersisted,
@@ -19,7 +19,7 @@ import {
   contentProgress,
   showFromContentRecord,
 } from "@/lib/tracking";
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 
 const STATUS_OPTIONS = [
   { value: "planning", label: "Planning" },
@@ -54,7 +54,7 @@ export default function ContentDetail() {
       // The route param can be a Content entity id (manual / library) or a TVmaze id (discovery).
       let contentRecord = null;
       try {
-        contentRecord = await base44.entities.Content.get(id);
+        contentRecord = await entities.Content.get(id);
       } catch (e) {
         // not a content id — treat as tvmaze id
       }
@@ -76,16 +76,16 @@ export default function ContentDetail() {
       // library item
       let item = null;
       if (contentRecord) {
-        const items = await base44.entities.LibraryItem.filter({ content_id: contentRecord.id });
+        const items = await entities.LibraryItem.filter({ content_id: contentRecord.id });
         item = items[0];
       } else if (show.tvmaze_id) {
-        const items = await base44.entities.LibraryItem.filter({ tvmaze_id: show.tvmaze_id });
+        const items = await entities.LibraryItem.filter({ tvmaze_id: show.tvmaze_id });
         item = items[0];
       }
 
       const [fr, links] = await Promise.all([
-        base44.entities.Franchise.list("-created_date", 200),
-        base44.entities.FranchiseContent.list("-created_date", 1000),
+        entities.Franchise.list("-created_date", 200),
+        entities.FranchiseContent.list("-created_date", 1000),
       ]);
       setFranchises(fr);
       setFranchiseLinks(links);
@@ -125,7 +125,7 @@ export default function ContentDetail() {
     setBusy(true);
     try {
       const cid = await ensureContentPersisted({ show: detail.show, seasons: detail.seasons || [] });
-      const created = await base44.entities.LibraryItem.create({
+      const created = await entities.LibraryItem.create({
         content_id: cid,
         tvmaze_id: detail.show.tvmaze_id,
         title: detail.show.title,
@@ -151,7 +151,7 @@ export default function ContentDetail() {
     if (!libraryItem) return;
     setBusy(true);
     try {
-      await base44.entities.LibraryItem.delete(libraryItem.id);
+      await entities.LibraryItem.delete(libraryItem.id);
       setLibraryItem(null);
       setContentId(null);
       setProgress([]);
@@ -162,7 +162,7 @@ export default function ContentDetail() {
 
   async function changeStatus(status) {
     if (!libraryItem) return;
-    const updated = await base44.entities.LibraryItem.update(libraryItem.id, { status });
+    const updated = await entities.LibraryItem.update(libraryItem.id, { status });
     setLibraryItem(updated);
   }
 
@@ -174,7 +174,7 @@ export default function ContentDetail() {
     const res = await syncContentStatus(contentId);
     if (res.unlocked.length > 0) setUnlocked(res.unlocked);
     if (libraryItem) {
-      const items = await base44.entities.LibraryItem.filter({ content_id: contentId });
+      const items = await entities.LibraryItem.filter({ content_id: contentId });
       if (items.length > 0) setLibraryItem(items[0]);
     }
   }
@@ -187,7 +187,7 @@ export default function ContentDetail() {
     const res = await syncContentStatus(contentId);
     if (res.unlocked.length > 0) setUnlocked(res.unlocked);
     if (libraryItem) {
-      const items = await base44.entities.LibraryItem.filter({ content_id: contentId });
+      const items = await entities.LibraryItem.filter({ content_id: contentId });
       if (items.length > 0) setLibraryItem(items[0]);
     }
   }
@@ -195,36 +195,36 @@ export default function ContentDetail() {
   async function assignFranchise(franchiseId) {
     if (!contentId) return;
     const existing = franchiseLinks.filter((l) => l.content_id === contentId);
-    for (const l of existing) await base44.entities.FranchiseContent.delete(l.id);
+    for (const l of existing) await entities.FranchiseContent.delete(l.id);
     if (franchiseId && franchiseId !== "none") {
-      await base44.entities.FranchiseContent.create({
+      await entities.FranchiseContent.create({
         franchise_id: franchiseId,
         content_id: contentId,
         title: detail.show.title,
         poster_url: detail.show.poster_url,
       });
     }
-    const links = await base44.entities.FranchiseContent.list("-created_date", 1000);
+    const links = await entities.FranchiseContent.list("-created_date", 1000);
     setFranchiseLinks(links);
   }
 
   async function createFranchise() {
     const name = window.prompt("Franchise name", `${detail?.show?.title} Universe`);
     if (!name || !contentId) return;
-    const created = await base44.entities.Franchise.create({
+    const created = await entities.Franchise.create({
       name,
       description: "",
       poster_url: detail.show.backdrop_url || detail.show.poster_url,
     });
-    await base44.entities.FranchiseContent.create({
+    await entities.FranchiseContent.create({
       franchise_id: created.id,
       content_id: contentId,
       title: detail.show.title,
       poster_url: detail.show.poster_url,
     });
     const [fr, links] = await Promise.all([
-      base44.entities.Franchise.list("-created_date", 200),
-      base44.entities.FranchiseContent.list("-created_date", 1000),
+      entities.Franchise.list("-created_date", 200),
+      entities.FranchiseContent.list("-created_date", 1000),
     ]);
     setFranchises(fr);
     setFranchiseLinks(links);

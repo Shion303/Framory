@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Trophy as TrophyIcon, Upload, Pencil, Trash2, X, ImagePlus, Save } from "lucide-react";
 import { useTrophies, useLibraryData } from "@/lib/useFramoryData";
-import { base44 } from "@/api/base44Client";
+import { entities, uploadFile } from "@/lib/api";
 import { Loading, EmptyState } from "@/components/States";
 import { TrophyBadge } from "@/components/TrophyBadge";
 
@@ -30,7 +30,7 @@ export function TrophyManager() {
     if (!file) return;
     setUploading(true);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await uploadFile(file);
       setForm((f) => ({ ...f, image_url: file_url }));
     } catch (err) {
       alert("Upload failed: " + (err.message || "error"));
@@ -53,9 +53,9 @@ export function TrophyManager() {
         condition_content_title: selected?.title || "",
       };
       if (editing === "new") {
-        await base44.entities.Trophy.create({ ...payload, is_unlocked: false });
+        await entities.Trophy.create({ ...payload, is_unlocked: false });
       } else {
-        await base44.entities.Trophy.update(editing, payload);
+        await entities.Trophy.update(editing, payload);
       }
       close();
       reload();
@@ -68,7 +68,7 @@ export function TrophyManager() {
 
   async function remove(id) {
     if (!window.confirm("Delete this trophy?")) return;
-    await base44.entities.Trophy.delete(id);
+    await entities.Trophy.delete(id);
     reload();
   }
 

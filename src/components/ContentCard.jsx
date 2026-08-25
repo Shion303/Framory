@@ -5,7 +5,7 @@ import { ProgressBar } from "@/components/States";
 import { TypeBadge } from "@/components/TypeBadge";
 import { Star } from "lucide-react";
 
-export function ContentCard({ show, progress, to }) {
+export function ContentCard({ show, progress = undefined, to = undefined }) {
   const href = to || `/content/${show.tvmaze_id}`;
   return (
     <Link to={href} className="group block w-[140px] sm:w-[150px] shrink-0">
@@ -38,7 +38,7 @@ export function ContentCard({ show, progress, to }) {
   );
 }
 
-export function ContentRow({ title, shows, loading, error, onRetry, progressMap }) {
+export function ContentRow({ title, shows, loading = false, error = undefined, onRetry = undefined, progressMap = undefined, icon: _icon = undefined }) {
   if (loading) {
     return (
       <section className="mb-8">

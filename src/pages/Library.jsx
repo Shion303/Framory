@@ -6,7 +6,7 @@ import { Poster } from "@/components/Poster";
 import { ProgressBar, Loading, ErrorState, EmptyState } from "@/components/States";
 import { TypeBadge, CONTENT_TYPES } from "@/components/TypeBadge";
 import { useLibraryData } from "@/lib/useFramoryData";
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 
 const STATUSES = [
   { value: "all", label: "All" },
@@ -62,7 +62,7 @@ export default function Library() {
 
   async function changeStatus(item, status) {
     try {
-      await base44.entities.LibraryItem.update(item.id, { status });
+      await entities.LibraryItem.update(item.id, { status });
       reload();
     } catch (e) {}
   }

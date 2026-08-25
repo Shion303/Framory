@@ -1,6 +1,5 @@
 import React from "react";
 import { Trophy as TrophyIcon, Lock, Calendar } from "lucide-react";
-import { Poster } from "@/components/Poster";
 
 export function TrophyBadge({ trophy, size = "md" }) {
   const dim = size === "lg" ? "w-28 h-28" : size === "sm" ? "w-14 h-14" : "w-20 h-20";

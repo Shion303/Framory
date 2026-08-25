@@ -1,27 +1,27 @@
 // Sync engine — updates TVmaze-sourced content metadata from TVmaze without touching user data.
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 import { getShowDetail } from "@/lib/tvmaze";
 
 // Read the latest sync status record (single-row table).
 export async function getSyncStatus() {
-  const list = await base44.entities.SyncStatus.list("-created_date", 1);
+  const list = await entities.SyncStatus.list("-created_date", 1);
   return list[0] || null;
 }
 
 async function setSyncStatus(patch) {
   const existing = await getSyncStatus();
   if (existing) {
-    return await base44.entities.SyncStatus.update(existing.id, patch);
+    return await entities.SyncStatus.update(existing.id, patch);
   }
-  return await base44.entities.SyncStatus.create({ status: "success", ...patch });
+  return await entities.SyncStatus.create({ status: "success", ...patch });
 }
 
 // Run a full sync across all TVMAZE-sourced content.
 // Returns { contentsUpdated, seasonsUpdated, episodesAdded, errors }.
-export async function runSync({ onProgress } = {}) {
+export async function runSync({ onProgress = undefined } = {}) {
   await setSyncStatus({ status: "running", last_sync: new Date().toISOString() });
 
-  const all = await base44.entities.Content.list("-created_date", 1000);
+  const all = await entities.Content.list("-created_date", 1000);
   const tvmazeContents = all.filter((c) => c.source !== "MANUAL" && c.tvmaze_id);
 
   let contentsUpdated = 0;
@@ -36,7 +36,7 @@ export async function runSync({ onProgress } = {}) {
       const { show, seasons, episodes } = detail;
 
       // Update content metadata (never touch user data).
-      await base44.entities.Content.update(c.id, {
+      await entities.Content.update(c.id, {
         title: show.title,
         summary: show.summary,
         poster_url: show.poster_url,
@@ -57,20 +57,20 @@ export async function runSync({ onProgress } = {}) {
       contentsUpdated++;
 
       // Sync seasons: update existing, add new.
-      const existingSeasons = await base44.entities.Season.filter({ content_id: c.id });
+      const existingSeasons = await entities.Season.filter({ content_id: c.id });
       const byNumber = {};
       existingSeasons.forEach((s) => (byNumber[s.season_number] = s));
       for (const se of seasons) {
         const epCount = episodes.filter((e) => e.season_number === se.season_number).length;
         if (byNumber[se.season_number]) {
-          await base44.entities.Season.update(byNumber[se.season_number].id, {
+          await entities.Season.update(byNumber[se.season_number].id, {
             title: se.title,
             episode_count: epCount,
             poster_url: se.poster_url,
           });
           seasonsUpdated++;
         } else {
-          await base44.entities.Season.create({
+          await entities.Season.create({
             content_id: c.id,
             tvmaze_id: se.tvmaze_id,
             season_number: se.season_number,
@@ -85,9 +85,9 @@ export async function runSync({ onProgress } = {}) {
       episodesAdded += episodes.length;
 
       // Keep library item poster/title in sync.
-      const libItems = await base44.entities.LibraryItem.filter({ content_id: c.id });
+      const libItems = await entities.LibraryItem.filter({ content_id: c.id });
       for (const item of libItems) {
-        await base44.entities.LibraryItem.update(item.id, {
+        await entities.LibraryItem.update(item.id, {
           title: show.title,
           poster_url: show.poster_url,
           content_type: show.content_type,

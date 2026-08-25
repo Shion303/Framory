@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Download, Upload, Trash2, Database } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { entities, ENTITY_NAMES } from "@/lib/api";
 
-const ENTITIES = ["Content", "Season", "Episode", "LibraryItem", "EpisodeProgress", "Franchise", "FranchiseContent", "Trophy", "MergeHistory", "SyncStatus"];
+const ENTITIES = ENTITY_NAMES;
 
 export function DataManager() {
   const [busy, setBusy] = useState(false);
@@ -14,7 +14,7 @@ export function DataManager() {
     try {
       const data = {};
       for (const name of ENTITIES) {
-        data[name] = await base44.entities[name].list("-created_date", 5000);
+        data[name] = await entities[name].list("-created_date", 5000);
       }
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -45,7 +45,7 @@ export function DataManager() {
         const records = data[name] || [];
         if (records.length === 0) continue;
         const clean = records.map(({ id, created_date, updated_date, created_by_id, created_by, ...rest }) => rest);
-        await base44.entities[name].bulkCreate(clean);
+        await entities[name].bulkCreate(clean);
         count += clean.length;
       }
       setMsg(`Imported ${count} records. Reload to see changes.`);
@@ -65,7 +65,7 @@ export function DataManager() {
     setMsg("");
     try {
       for (const name of ENTITIES) {
-        await base44.entities[name].deleteMany({});
+        await entities[name].deleteMany({});
       }
       setMsg("All data deleted. Reloading…");
       setTimeout(() => window.location.reload(), 1200);

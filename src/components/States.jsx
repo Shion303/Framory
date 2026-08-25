@@ -11,7 +11,7 @@ export function Loading({ label = "Loading…", className = "" }) {
   );
 }
 
-export function ErrorState({ message = "Something went wrong", onRetry }) {
+export function ErrorState({ message = "Something went wrong", onRetry = undefined }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center px-6">
       <div className="w-14 h-14 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
@@ -28,7 +28,7 @@ export function ErrorState({ message = "Something went wrong", onRetry }) {
   );
 }
 
-export function EmptyState({ title = "Nothing here yet", description, icon: Icon = Inbox, action }) {
+export function EmptyState({ title = "Nothing here yet", description = undefined, icon: Icon = Inbox, action = undefined }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center px-6">
       <div className="w-14 h-14 rounded-full bg-secondary flex items-center justify-center mb-4">

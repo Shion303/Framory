@@ -1,5 +1,5 @@
 // Tracking engine — derives progress from episodes and unlocks trophies.
-import { base44 } from "@/api/base44Client";
+import { entities } from "@/lib/api";
 
 /* ---------- pure progress helpers ---------- */
 
@@ -37,20 +37,20 @@ export function franchiseProgress(franchiseContents, seasonsByContent, progressB
 /* ---------- DB helpers ---------- */
 
 export async function loadLibraryItems() {
-  return await base44.entities.LibraryItem.list("-updated_date", 500);
+  return await entities.LibraryItem.list("-updated_date", 500);
 }
 
 export async function loadSeasonsForContent(contentId) {
-  return await base44.entities.Season.filter({ content_id: contentId });
+  return await entities.Season.filter({ content_id: contentId });
 }
 
 export async function loadProgressForContent(contentId) {
-  return await base44.entities.EpisodeProgress.filter({ content_id: contentId });
+  return await entities.EpisodeProgress.filter({ content_id: contentId });
 }
 
 export async function loadAllSeasonsGrouped(libraryItems) {
   const ids = libraryItems.map((i) => i.content_id);
-  const all = await Promise.all(ids.map((id) => base44.entities.Season.filter({ content_id: id })));
+  const all = await Promise.all(ids.map((id) => entities.Season.filter({ content_id: id })));
   const map = {};
   ids.forEach((id, i) => {
     map[id] = all[i];
@@ -60,7 +60,7 @@ export async function loadAllSeasonsGrouped(libraryItems) {
 
 export async function loadAllProgressGrouped(libraryItems) {
   const ids = libraryItems.map((i) => i.content_id);
-  const all = await Promise.all(ids.map((id) => base44.entities.EpisodeProgress.filter({ content_id: id })));
+  const all = await Promise.all(ids.map((id) => entities.EpisodeProgress.filter({ content_id: id })));
   const map = {};
   ids.forEach((id, i) => {
     map[id] = all[i];
@@ -73,12 +73,12 @@ export async function loadAllProgressGrouped(libraryItems) {
 export async function ensureContentPersisted(detail) {
   const { show, seasons } = detail;
   const existing = show.tvmaze_id
-    ? await base44.entities.Content.filter({ tvmaze_id: show.tvmaze_id })
+    ? await entities.Content.filter({ tvmaze_id: show.tvmaze_id })
     : [];
   let contentId;
   if (existing.length > 0) {
     contentId = existing[0].id;
-    await base44.entities.Content.update(contentId, {
+    await entities.Content.update(contentId, {
       total_seasons: show.total_seasons,
       total_episodes: show.total_episodes,
       content_type: show.content_type || existing[0].content_type || "TV_SERIES",
@@ -87,7 +87,7 @@ export async function ensureContentPersisted(detail) {
       provider_id: String(show.tvmaze_id),
     });
   } else {
-    const created = await base44.entities.Content.create({
+    const created = await entities.Content.create({
       tvmaze_id: show.tvmaze_id,
       title: show.title,
       original_title: show.original_title,
@@ -114,11 +114,11 @@ export async function ensureContentPersisted(detail) {
   }
 
   // persist seasons (idempotent)
-  const existingSeasons = await base44.entities.Season.filter({ content_id: contentId });
+  const existingSeasons = await entities.Season.filter({ content_id: contentId });
   const existingNumbers = new Set(existingSeasons.map((s) => s.season_number));
   const toCreate = seasons.filter((s) => !existingNumbers.has(s.season_number));
   if (toCreate.length > 0) {
-    await base44.entities.Season.bulkCreate(
+    await entities.Season.bulkCreate(
       toCreate.map((s) => ({
         content_id: contentId,
         tvmaze_id: s.tvmaze_id,
@@ -135,7 +135,7 @@ export async function ensureContentPersisted(detail) {
 
 // Load manually-created episodes for a content (stored in Episode entity).
 export async function loadEpisodesForContent(contentId) {
-  return await base44.entities.Episode.filter({ content_id: contentId });
+  return await entities.Episode.filter({ content_id: contentId });
 }
 
 // Build a "show"-like object from a stored Content record (for manual content).
@@ -166,14 +166,14 @@ export function showFromContentRecord(c) {
 /* ---------- episode toggle ---------- */
 
 export async function setEpisodeWatched(contentId, seasonNumber, episodeNumber, watched) {
-  const matches = await base44.entities.EpisodeProgress.filter({
+  const matches = await entities.EpisodeProgress.filter({
     content_id: contentId,
     season_number: seasonNumber,
     episode_number: episodeNumber,
   });
   if (watched) {
     if (matches.length === 0) {
-      await base44.entities.EpisodeProgress.create({
+      await entities.EpisodeProgress.create({
         content_id: contentId,
         season_number: seasonNumber,
         episode_number: episodeNumber,
@@ -182,13 +182,13 @@ export async function setEpisodeWatched(contentId, seasonNumber, episodeNumber, 
     }
   } else {
     if (matches.length > 0) {
-      await base44.entities.EpisodeProgress.delete(matches[0].id);
+      await entities.EpisodeProgress.delete(matches[0].id);
     }
   }
 }
 
 export async function setSeasonWatched(contentId, season, episodes, watched) {
-  const existing = await base44.entities.EpisodeProgress.filter({
+  const existing = await entities.EpisodeProgress.filter({
     content_id: contentId,
     season_number: season.season_number,
   });
@@ -202,10 +202,10 @@ export async function setSeasonWatched(contentId, season, episodes, watched) {
         episode_number: e.episode_number,
         watched_date: new Date().toISOString(),
       }));
-    if (toCreate.length > 0) await base44.entities.EpisodeProgress.bulkCreate(toCreate);
+    if (toCreate.length > 0) await entities.EpisodeProgress.bulkCreate(toCreate);
   } else {
     if (existing.length > 0) {
-      await base44.entities.EpisodeProgress.deleteMany({
+      await entities.EpisodeProgress.deleteMany({
         content_id: contentId,
         season_number: season.season_number,
       });
@@ -219,16 +219,16 @@ export async function syncContentStatus(contentId) {
   const [seasons, progress, libraryItems] = await Promise.all([
     loadSeasonsForContent(contentId),
     loadProgressForContent(contentId),
-    base44.entities.LibraryItem.filter({ content_id: contentId }),
+    entities.LibraryItem.filter({ content_id: contentId }),
   ]);
   const cp = contentProgress(seasons, progress);
   const item = libraryItems[0];
   if (!item) return { completed: cp.completed, unlocked: [] };
 
   if (cp.completed && item.status !== "completed") {
-    await base44.entities.LibraryItem.update(item.id, { status: "completed" });
+    await entities.LibraryItem.update(item.id, { status: "completed" });
   } else if (!cp.completed && item.status === "completed") {
-    await base44.entities.LibraryItem.update(item.id, { status: "watching" });
+    await entities.LibraryItem.update(item.id, { status: "watching" });
   }
 
   const unlocked = await checkAndUnlockTrophies(contentId, cp.completed);
@@ -238,13 +238,13 @@ export async function syncContentStatus(contentId) {
 export async function checkAndUnlockTrophies(contentId, contentCompleted) {
   const unlocked = [];
   if (!contentCompleted) return unlocked;
-  const trophies = await base44.entities.Trophy.filter({
+  const trophies = await entities.Trophy.filter({
     condition_type: "complete_series",
     condition_content_id: contentId,
     is_unlocked: false,
   });
   for (const t of trophies) {
-    await base44.entities.Trophy.update(t.id, {
+    await entities.Trophy.update(t.id, {
       is_unlocked: true,
       unlocked_date: new Date().toISOString(),
     });
@@ -256,7 +256,7 @@ export async function checkAndUnlockTrophies(contentId, contentCompleted) {
 /* ---------- full trophy re-evaluation (for settings / home) ---------- */
 
 export async function reevaluateAllTrophies() {
-  const trophies = await base44.entities.Trophy.list();
+  const trophies = await entities.Trophy.list();
   const locked = trophies.filter((t) => !t.is_unlocked && t.condition_type === "complete_series" && t.condition_content_id);
   if (locked.length === 0) return [];
   const contentIds = [...new Set(locked.map((t) => t.condition_content_id))];
@@ -273,7 +273,7 @@ export async function reevaluateAllTrophies() {
   const newlyUnlocked = [];
   for (const t of locked) {
     if (completedSet.has(t.condition_content_id)) {
-      await base44.entities.Trophy.update(t.id, {
+      await entities.Trophy.update(t.id, {
         is_unlocked: true,
         unlocked_date: new Date().toISOString(),
       });
