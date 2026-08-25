@@ -130,7 +130,6 @@ export async function mergeContents(primaryId, secondaryId) {
     primary_title: primary.title,
     merged_content_ids: [secondaryId],
     merged_titles: [secondary.title],
-    merge_date: new Date().toISOString(),
   });
 
   return { primary, secondary };

@@ -104,7 +104,7 @@ export function SyncDatabase() {
                   <p className="font-medium truncate">Kept: {h.primary_title}</p>
                   <p className="text-muted-foreground truncate">Merged: {h.merged_titles?.join(", ")}</p>
                 </div>
-                <span className="text-muted-foreground whitespace-nowrap">{h.merge_date ? new Date(h.merge_date).toLocaleString() : ""}</span>
+                <span className="text-muted-foreground whitespace-nowrap">{h.created_date ? new Date(h.created_date).toLocaleString() : ""}</span>
               </div>
             ))}
           </div>
