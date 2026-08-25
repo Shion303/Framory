@@ -11,6 +11,8 @@ import {
   ArrowLeft,
   Network,
   Edit3,
+  Film,
+  Check,
 } from "lucide-react";
 
 import Layout from "@/components/Layout";
@@ -147,7 +149,13 @@ export function ContentDetail() {
           loadProgressForContent(item.content_id),
         ]);
 
-        setSeasons(se);
+        const isFilm = show.content_type === "FILM";
+
+        setSeasons(
+          isFilm && se.length === 0 && apiSeasons
+            ? apiSeasons
+            : se
+        );
         setProgress(pr);
 
         if (contentRecord?.source === "MANUAL") {
@@ -787,36 +795,110 @@ export function ContentDetail() {
         </div>
 
         <div className="mt-6 mb-10">
-          <h2 className="text-lg font-semibold mb-3 px-1">
-            Seasons{" "}
-            {seasons.length > 0 && (
-              <span className="text-muted-foreground text-sm">
-                · {seasons.length}
-              </span>
-            )}
-          </h2>
+          {show.content_type === "FILM" ? (
+            <>
+              <h2 className="text-lg font-semibold mb-3 px-1">
+                Film
+              </h2>
 
-          {!libraryItem && (
-            <p className="text-xs text-muted-foreground mb-3 px-1">
-              Add to your library to start tracking episodes.
-            </p>
+              {!libraryItem && (
+                <p className="text-xs text-muted-foreground mb-3 px-1">
+                  Add to your library to start tracking.
+                </p>
+              )}
+
+              {libraryItem && (() => {
+                const filmEp = renderEpisodes[0];
+                const filmWatched = progress.some(
+                  (p) =>
+                    Number(p.season_number) === 0 &&
+                    Number(p.episode_number) === 1
+                );
+
+                return (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (filmEp) toggleEpisode(filmEp, !filmWatched);
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.key === "Enter" || e.key === " ") && filmEp) {
+                        e.preventDefault();
+                        toggleEpisode(filmEp, !filmWatched);
+                      }
+                    }}
+                    className={`w-full flex items-center gap-4 p-4 rounded-2xl text-left transition border select-none cursor-pointer ${
+                      filmWatched
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
+                    }`}
+                  >
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition ${
+                        filmWatched
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-muted-foreground border border-border"
+                      }`}
+                    >
+                      {filmWatched ? (
+                        <Check className="w-5 h-5" />
+                      ) : (
+                        <Film className="w-4 h-4" />
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-sm font-semibold truncate">
+                        {filmEp?.title || show.title}
+                      </h3>
+
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {filmWatched ? "Watched" : "Not watched"}
+                      </p>
+                    </div>
+
+                    <span className="text-sm font-semibold text-primary">
+                      {filmWatched ? "100%" : "0%"}
+                    </span>
+                  </div>
+                );
+              })()}
+            </>
+          ) : (
+            <>
+              <h2 className="text-lg font-semibold mb-3 px-1">
+                Seasons{" "}
+                {seasons.length > 0 && (
+                  <span className="text-muted-foreground text-sm">
+                    · {seasons.length}
+                  </span>
+                )}
+              </h2>
+
+              {!libraryItem && (
+                <p className="text-xs text-muted-foreground mb-3 px-1">
+                  Add to your library to start tracking episodes.
+                </p>
+              )}
+
+              <div className="space-y-2.5">
+                {seasons.map((season) => (
+                  <SeasonBlock
+                    key={season.id || season.season_number}
+                    season={season}
+                    episodes={renderEpisodes}
+                    progressRecords={progress}
+                    disabled={!libraryItem}
+                    onToggleEpisode={toggleEpisode}
+                    onToggleSeason={(watched) =>
+                      toggleSeason(season, watched)
+                    }
+                  />
+                ))}
+              </div>
+            </>
           )}
-
-          <div className="space-y-2.5">
-            {seasons.map((season) => (
-              <SeasonBlock
-                key={season.id || season.season_number}
-                season={season}
-                episodes={renderEpisodes}
-                progressRecords={progress}
-                disabled={!libraryItem}
-                onToggleEpisode={toggleEpisode}
-                onToggleSeason={(watched) =>
-                  toggleSeason(season, watched)
-                }
-              />
-            ))}
-          </div>
         </div>
       </div>
     </Layout>
