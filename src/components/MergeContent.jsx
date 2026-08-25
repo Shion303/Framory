@@ -22,7 +22,7 @@ function ContentPicker({ label, selected, onSelect, excludeId }) {
     if (typeFilter !== "ALL") list = list.filter((c) => (c.content_type || "TV_SERIES") === typeFilter);
     if (query.trim()) {
       const q = query.toLowerCase();
-      list = list.filter((c) => c.title?.toLowerCase().includes(q) || c.id.toLowerCase().includes(q) || String(c.tvmaze_id || "") === q);
+      list = list.filter((c) => c.title?.toLowerCase().includes(q) || c.id.toLowerCase().includes(q) || String(c.tmdb_id || "") === q);
     }
     return list;
   }, [all, query, typeFilter]);
@@ -37,7 +37,7 @@ function ContentPicker({ label, selected, onSelect, excludeId }) {
             <p className="text-sm font-semibold truncate">{selected.title}</p>
             <div className="flex items-center gap-2 mt-1">
               <TypeBadge type={selected.content_type} size="xs" />
-              <span className="text-[10px] text-muted-foreground">{selected.source === "MANUAL" ? "Manual" : "TVmaze"}</span>
+              <span className="text-[10px] text-muted-foreground">{selected.source === "MANUAL" ? "Manual" : "TMDB"}</span>
             </div>
           </div>
           <button onClick={() => onSelect(null)} className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive"><X className="w-4 h-4" /></button>
@@ -61,7 +61,7 @@ function ContentPicker({ label, selected, onSelect, excludeId }) {
                 <div className="w-8 h-11 shrink-0"><Poster src={c.poster_url} alt={c.title} /></div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate">{c.title}</p>
-                  <span className="text-[10px] text-muted-foreground">{TYPE_META[c.content_type || "TV_SERIES"].label} · {c.source === "MANUAL" ? "Manual" : "TVmaze"}</span>
+                  <span className="text-[10px] text-muted-foreground">{TYPE_META[c.content_type || "TV_SERIES"].label} · {c.source === "MANUAL" ? "Manual" : "TMDB"}</span>
                 </div>
               </button>
             ))}

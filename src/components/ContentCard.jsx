@@ -6,7 +6,7 @@ import { TypeBadge } from "@/components/TypeBadge";
 import { Star } from "lucide-react";
 
 export function ContentCard({ show, progress = undefined, to = undefined }) {
-  const href = to || `/content/${show.tvmaze_id}`;
+  const href = to || `/content/${show.tmdb_id}`;
   return (
     <Link to={href} className="group block w-[140px] sm:w-[150px] shrink-0">
       <div className="relative rounded-xl overflow-hidden bg-secondary ring-1 ring-border/60 transition-all duration-300 group-hover:ring-primary/60 group-hover:shadow-[0_0_30px_-8px_hsl(265_89%_68%/0.5)]">
@@ -58,7 +58,7 @@ export function ContentRow({ title, shows, loading = false, error = undefined, o
       <h2 className="text-lg font-semibold mb-3 px-4 sm:px-6">{title}</h2>
       <div className="flex gap-3 overflow-x-auto no-scrollbar px-4 sm:px-6 pb-2">
         {shows.map((s) => (
-          <ContentCard key={s.tvmaze_id} show={s} progress={progressMap?.[s.tvmaze_id]} />
+          <ContentCard key={s.tmdb_id} show={s} progress={progressMap?.[s.tmdb_id]} />
         ))}
       </div>
     </section>

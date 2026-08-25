@@ -47,7 +47,7 @@ export default function Layout({ children }) {
           })}
         </nav>
         <div className="px-6 py-4 text-[10px] text-muted-foreground/60">
-          Powered by TVmaze
+          Powered by TMDB
         </div>
       </aside>
 

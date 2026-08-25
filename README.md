@@ -1,6 +1,6 @@
 # Framory
 
-Personal tracker for TV series, anime, and films. Framory is a single-user React + Vite app. Library data lives in the browser (IndexedDB). Show metadata comes from the public [TVmaze](https://www.tvmaze.com/api) API.
+Personal tracker for TV series, anime, and films. Framory is a single-user React + Vite app. Library data lives in the browser (IndexedDB). Show metadata comes from the [TMDB](https://developer.themoviedb.org) API.
 
 ## Prerequisites
 
@@ -36,11 +36,11 @@ Framory stores these collections in IndexedDB (`framory`):
 
 Use **Settings → Data** to export a JSON backup, import a backup, or reset all data. Clearing site data for this origin also removes the local library.
 
-TVmaze remains the external source for search, details, seasons, episodes, images, ratings, genres, discovery, schedule, and sync.
+TMDB remains the external source for search, details, seasons, episodes, images, ratings, genres, discovery, and sync.
 
 ## Environment variables
 
-See `.env.example`. The app does not require secrets or API keys.
+Set `VITE_TMDB_API_KEY` in `.env.local`. Get your key at https://www.themoviedb.org/settings/api
 
 ## Checks
 

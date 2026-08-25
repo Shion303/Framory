@@ -18,7 +18,7 @@ export function ErrorState({ message = "Something went wrong", onRetry = undefin
         <AlertTriangle className="w-7 h-7 text-destructive" />
       </div>
       <p className="text-foreground font-medium mb-1">{message}</p>
-      <p className="text-sm text-muted-foreground mb-4">TVmaze may be unavailable. Try again.</p>
+      <p className="text-sm text-muted-foreground mb-4">TMDB may be unavailable. Try again.</p>
       {onRetry && (
         <Button onClick={onRetry} variant="secondary" className="gap-2">
           <RefreshCw className="w-4 h-4" /> Retry

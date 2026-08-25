@@ -160,9 +160,9 @@ export async function loadAllProgressGrouped(libraryItems) {
 export async function ensureContentPersisted(detail) {
   const { show, seasons = [] } = detail;
 
-  const existing = show?.tvmaze_id
+  const existing = show?.tmdb_id
     ? await entities.Content.filter({
-        tvmaze_id: show.tvmaze_id,
+        tmdb_id: show.tmdb_id,
       })
     : [];
 
@@ -178,15 +178,15 @@ export async function ensureContentPersisted(detail) {
         show.content_type ||
         existing[0].content_type ||
         "TV_SERIES",
-      source: "TVMAZE",
-      provider: "TVMAZE",
-      provider_id: show.tvmaze_id
-        ? String(show.tvmaze_id)
+      source: "TMDB",
+      provider: "TMDB",
+      provider_id: show.tmdb_id
+        ? String(show.tmdb_id)
         : "",
     });
   } else {
     const created = await entities.Content.create({
-      tvmaze_id: show.tvmaze_id,
+      tmdb_id: show.tmdb_id,
       title: show.title,
       original_title: show.original_title,
       summary: show.summary,
@@ -204,10 +204,10 @@ export async function ensureContentPersisted(detail) {
       total_seasons: show.total_seasons,
       total_episodes: show.total_episodes,
       content_type: show.content_type || "TV_SERIES",
-      source: "TVMAZE",
-      provider: "TVMAZE",
-      provider_id: show.tvmaze_id
-        ? String(show.tvmaze_id)
+      source: "TMDB",
+      provider: "TMDB",
+      provider_id: show.tmdb_id
+        ? String(show.tmdb_id)
         : "",
     });
 
@@ -238,12 +238,12 @@ export async function ensureContentPersisted(detail) {
     await entities.Season.bulkCreate(
       toCreate.map((season) => ({
         content_id: contentId,
-        tvmaze_id: season.tvmaze_id,
+        tmdb_id: season.tmdb_id,
         season_number: season.season_number,
         title: season.title,
         episode_count: season.episode_count,
         poster_url: season.poster_url,
-        source: "TVMAZE",
+        source: "TMDB",
       }))
     );
   }
@@ -255,7 +255,7 @@ export async function ensureContentPersisted(detail) {
 
 export function showFromContentRecord(c) {
   return {
-    tvmaze_id: c.tvmaze_id || null,
+    tmdb_id: c.tmdb_id || null,
     title: c.title || "Untitled",
     original_title: c.original_title || "",
     summary: c.summary || "",
@@ -271,7 +271,7 @@ export function showFromContentRecord(c) {
     country: c.country || "",
     release_date: c.release_date || "",
     content_type: c.content_type || "TV_SERIES",
-    source: c.source || "TVMAZE",
+    source: c.source || "TMDB",
     total_seasons: c.total_seasons || 0,
     total_episodes: c.total_episodes || 0,
   };

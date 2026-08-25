@@ -4,7 +4,7 @@ import Layout from "@/components/Layout";
 import { ContentRow, ContentCard } from "@/components/ContentCard";
 import { Loading, ErrorState, EmptyState } from "@/components/States";
 import { CONTENT_TYPES } from "@/components/TypeBadge";
-import { getShowPool, getScheduleToday, getDiscoverySections, searchShows } from "@/lib/tvmaze";
+import { getShowPool, getScheduleToday, getDiscoverySections, searchShows } from "@/lib/tmdb";
 
 export default function Discovery() {
   const [sections, setSections] = useState(null);
@@ -62,7 +62,7 @@ export default function Discovery() {
     <Layout>
       <div className="px-4 sm:px-6 pt-6 sm:pt-8">
         <h1 className="text-2xl sm:text-3xl font-bold mb-1">Discovery</h1>
-        <p className="text-sm text-muted-foreground mb-5">Find your next obsession, powered by TVmaze.</p>
+        <p className="text-sm text-muted-foreground mb-5">Find your next obsession, powered by TMDB.</p>
 
         {/* Search */}
         <div className="relative mb-8">
@@ -99,7 +99,7 @@ export default function Discovery() {
       {isSearching ? (
         <div className="px-4 sm:px-6">
           <h2 className="text-lg font-semibold mb-3">Search results{searching ? "" : ` · ${searchResults?.length || 0}`}</h2>
-          {searching && <Loading label="Searching TVmaze…" />}
+          {searching && <Loading label="Searching TMDB…" />}
           {searchError && <ErrorState message={searchError} onRetry={() => setQuery(query)} />}
           {!searching && !searchError && searchResults?.length === 0 && (
             <EmptyState title="No results" description={`No series found for "${query}".`} icon={SearchIcon} />
@@ -107,7 +107,7 @@ export default function Discovery() {
           {!searching && !searchError && searchResults?.length > 0 && (
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 sm:gap-4">
               {searchResults.filter((s) => typeFilter === "ALL" || s.content_type === typeFilter).map((s) => (
-                <ContentCard key={s.tvmaze_id} show={s} />
+                <ContentCard key={s.tmdb_id} show={s} />
               ))}
             </div>
           )}

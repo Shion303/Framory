@@ -6,7 +6,7 @@ import { ContentCard } from "@/components/ContentCard";
 import { Loading, ErrorState, ProgressBar } from "@/components/States";
 import { useLibraryData, useTrophies, useFranchises } from "@/lib/useFramoryData";
 import { contentProgress } from "@/lib/tracking";
-import { getShowDetail } from "@/lib/tvmaze";
+import { getShowDetail } from "@/lib/tmdb";
 import { autoSyncIfNeeded } from "@/lib/sync";
 
 function SectionHeader({ title, icon: Icon, to = undefined }) {
@@ -32,7 +32,7 @@ export default function Home() {
   const [continueDetails, setContinueDetails] = useState({});
   const [loadingDetails, setLoadingDetails] = useState(false);
 
-  // Background auto-sync with TVmaze (runs at most every 6 hours).
+  // Background auto-sync with TMDB (runs at most every 6 hours).
   useEffect(() => {
     autoSyncIfNeeded();
   }, []);
@@ -48,7 +48,7 @@ export default function Home() {
     Promise.all(
       inProgress.slice(0, 12).map(async (item) => {
         try {
-          const detail = await getShowDetail(item.tvmaze_id);
+          const detail = await getShowDetail(item.tmdb_id);
           const seasons = seasonsByContent[item.content_id] || detail.seasons;
           const progress = progressByContent[item.content_id] || [];
           const watchedNums = new Set(progress.map((p) => `${p.season_number}-${p.episode_number}`));
@@ -110,7 +110,7 @@ export default function Home() {
   const nearTrophies = trophies.filter((t) => !t.is_unlocked).slice(0, 4);
 
   const libraryShows = library.slice(0, 20).map((i) => ({
-    tvmaze_id: i.tvmaze_id,
+    tmdb_id: i.tmdb_id,
     content_id: i.content_id,
     title: i.title,
     poster_url: i.poster_url,
@@ -181,7 +181,7 @@ export default function Home() {
             {inProgress.slice(0, 20).map((i) => (
               <ContentCard
                 key={i.id}
-                show={{ tvmaze_id: i.tvmaze_id, title: i.title, poster_url: i.poster_url, year: null, rating: 0, content_type: i.content_type }}
+                show={{ tmdb_id: i.tmdb_id, title: i.title, poster_url: i.poster_url, year: null, rating: 0, content_type: i.content_type }}
                 progress={i.cp?.percent || 0}
                 to={`/content/${i.content_id}`}
               />
@@ -196,7 +196,7 @@ export default function Home() {
           <SectionHeader title="My Library" icon={Sparkles} to="/library" />
           <div className="flex gap-3 overflow-x-auto no-scrollbar px-4 sm:px-6 pb-2">
             {libraryShows.map((s) => (
-              <ContentCard key={s.content_id || s.tvmaze_id} show={s} to={`/content/${s.content_id}`} />
+              <ContentCard key={s.content_id || s.tmdb_id} show={s} to={`/content/${s.content_id}`} />
             ))}
           </div>
         </section>
@@ -210,7 +210,7 @@ export default function Home() {
             {completed.slice(0, 20).map((i) => (
               <ContentCard
                 key={i.id}
-                show={{ tvmaze_id: i.tvmaze_id, title: i.title, poster_url: i.poster_url, year: null, rating: 0, content_type: i.content_type }}
+                show={{ tmdb_id: i.tmdb_id, title: i.title, poster_url: i.poster_url, year: null, rating: 0, content_type: i.content_type }}
                 progress={100}
                 to={`/content/${i.content_id}`}
               />

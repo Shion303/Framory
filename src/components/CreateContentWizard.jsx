@@ -424,7 +424,7 @@ export function CreateContentWizard({
             </h3>
 
             <p className="text-xs text-muted-foreground">
-              Add a title manually when it's not on TVmaze.
+              Add a title manually when it's not on TMDB.
             </p>
           </div>
 

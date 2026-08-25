@@ -24,7 +24,7 @@ import {
 import { SeasonBlock } from "@/components/SeasonBlock";
 import { TrophyUnlockModal } from "@/components/TrophyUnlockModal";
 import { TypeBadge } from "@/components/TypeBadge";
-import { getShowDetail } from "@/lib/tvmaze";
+import { getShowDetail } from "@/lib/tmdb";
 
 import {
   ensureContentPersisted,
@@ -84,7 +84,7 @@ export function ContentDetail() {
       try {
         contentRecord = await entities.Content.get(id);
       } catch (e) {
-        // If the route id is not a Content id, treat it as a TVMaze id.
+        // If the route id is not a Content id, treat it as a TMDB id.
       }
 
       let show;
@@ -96,11 +96,11 @@ export function ContentDetail() {
         apiSeasons = null;
         apiEpisodes = null;
       } else {
-        const tvmazeId = contentRecord
-          ? contentRecord.tvmaze_id
+        const tmdbId = contentRecord
+          ? contentRecord.tmdb_id
           : Number(id);
 
-        const d = await getShowDetail(tvmazeId);
+        const d = await getShowDetail(tmdbId);
 
         show = d.show;
         apiSeasons = d.seasons;
@@ -122,9 +122,9 @@ export function ContentDetail() {
         });
 
         item = items[0];
-      } else if (show.tvmaze_id) {
+      } else if (show.tmdb_id) {
         const items = await entities.LibraryItem.filter({
-          tvmaze_id: show.tvmaze_id,
+          tmdb_id: show.tmdb_id,
         });
 
         item = items[0];
@@ -186,7 +186,7 @@ export function ContentDetail() {
 
       const created = await entities.LibraryItem.create({
         content_id: cid,
-        tvmaze_id: detail.show.tvmaze_id,
+        tmdb_id: detail.show.tmdb_id,
         title: detail.show.title,
         poster_url: detail.show.poster_url,
         status,

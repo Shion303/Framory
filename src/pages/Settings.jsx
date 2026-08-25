@@ -90,10 +90,10 @@ export default function Settings() {
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">
               Framory is a personal space to discover, collect, follow and complete entire television universes —
-              earning trophies along the way. Series data is provided by TVmaze; anime, series and films can also be
+              earning trophies along the way. Series data is provided by TMDB; anime, series and films can also be
               created manually.
             </p>
-            <p className="text-[11px] text-muted-foreground/60 mt-3">Data source: api.tvmaze.com · No account required</p>
+            <p className="text-[11px] text-muted-foreground/60 mt-3">Data source: api.themoviedb.org · API key required</p>
           </div>
         </section>
       </div>

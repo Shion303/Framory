@@ -88,7 +88,7 @@ export function SeasonBlock({
 
               return (
                 <EpisodeRow
-                  key={ep.id || ep.tvmaze_id || episodeKey}
+                  key={ep.id || ep.tmdb_id || episodeKey}
                   episode={ep}
                   watched={watched}
                   disabled={disabled}
