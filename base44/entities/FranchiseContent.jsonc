@@ -1,0 +1,25 @@
+{
+  "name": "FranchiseContent",
+  "type": "object",
+  "properties": {
+    "franchise_id": {
+      "type": "string"
+    },
+    "content_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "poster_url": {
+      "type": "string"
+    },
+    "order": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "franchise_id",
+    "content_id"
+  ]
+}

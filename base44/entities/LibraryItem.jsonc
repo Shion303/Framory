@@ -1,0 +1,49 @@
+{
+  "name": "LibraryItem",
+  "type": "object",
+  "properties": {
+    "content_id": {
+      "type": "string"
+    },
+    "tvmaze_id": {
+      "type": "number"
+    },
+    "title": {
+      "type": "string"
+    },
+    "poster_url": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "watching",
+        "completed",
+        "paused",
+        "dropped"
+      ],
+      "default": "planning"
+    },
+    "franchise_id": {
+      "type": "string"
+    },
+    "added_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "ANIME",
+        "TV_SERIES",
+        "FILM"
+      ],
+      "default": "TV_SERIES"
+    }
+  },
+  "required": [
+    "content_id",
+    "status"
+  ]
+}

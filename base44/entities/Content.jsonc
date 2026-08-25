@@ -1,0 +1,87 @@
+{
+  "name": "Content",
+  "type": "object",
+  "properties": {
+    "tvmaze_id": {
+      "type": "number"
+    },
+    "title": {
+      "type": "string"
+    },
+    "original_title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "poster_url": {
+      "type": "string"
+    },
+    "backdrop_url": {
+      "type": "string"
+    },
+    "genres": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "year": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string"
+    },
+    "network": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "rating": {
+      "type": "number"
+    },
+    "language": {
+      "type": "string"
+    },
+    "country": {
+      "type": "string"
+    },
+    "release_date": {
+      "type": "string"
+    },
+    "total_seasons": {
+      "type": "number"
+    },
+    "total_episodes": {
+      "type": "number"
+    },
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "ANIME",
+        "TV_SERIES",
+        "FILM"
+      ],
+      "default": "TV_SERIES"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "TVMAZE",
+        "MANUAL"
+      ],
+      "default": "TVMAZE"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "content_type"
+  ]
+}

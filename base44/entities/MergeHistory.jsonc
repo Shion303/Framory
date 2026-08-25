@@ -1,0 +1,31 @@
+{
+  "name": "MergeHistory",
+  "type": "object",
+  "properties": {
+    "primary_content_id": {
+      "type": "string"
+    },
+    "primary_title": {
+      "type": "string"
+    },
+    "merged_content_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "merged_titles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "merge_date": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "primary_content_id"
+  ]
+}
