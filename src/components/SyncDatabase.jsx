@@ -101,8 +101,8 @@ export function SyncDatabase() {
             {history.map((h) => (
               <div key={h.id} className="flex items-center gap-3 text-xs rounded-xl bg-secondary/50 p-3">
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">Kept: {h.primary_title}</p>
-                  <p className="text-muted-foreground truncate">Merged: {h.merged_titles?.join(", ")}</p>
+                  <p className="font-medium truncate">{h.resolved_titles?.join(" + ") || "Contents linked"}</p>
+                  <p className="text-muted-foreground truncate">({h.merged_content_ids?.length || 0} contents)</p>
                 </div>
                 <span className="text-muted-foreground whitespace-nowrap">{h.created_date ? new Date(h.created_date).toLocaleString() : ""}</span>
               </div>

@@ -308,7 +308,6 @@ export function CreateContentWizard({
                   ? parseInt(e.runtime, 10)
                   : 0,
                 image_url: e.image_url,
-                source: "MANUAL",
               }))
             );
           }

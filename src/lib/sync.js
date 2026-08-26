@@ -50,11 +50,23 @@ export async function runSync({ onProgress = undefined } = {}) {
         language: show.language,
         country: show.country,
         release_date: show.release_date,
-        total_seasons: seasons.length,
-        total_episodes: episodes.length,
+        total_seasons: show.total_seasons || seasons.length,
+        total_episodes: show.total_episodes || episodes.length,
         content_type: show.content_type,
       });
       contentsUpdated++;
+
+      if (show.content_type === "FILM") {
+        const libItems = await entities.LibraryItem.filter({ content_id: c.id });
+        for (const item of libItems) {
+          await entities.LibraryItem.update(item.id, {
+            title: show.title,
+            poster_url: show.poster_url,
+            content_type: show.content_type,
+          });
+        }
+        continue;
+      }
 
       // Sync seasons: update existing, add new.
       const existingSeasons = await entities.Season.filter({ content_id: c.id });
@@ -82,7 +94,32 @@ export async function runSync({ onProgress = undefined } = {}) {
           seasonsUpdated++;
         }
       }
-      episodesAdded += episodes.length;
+      // Sync episodes: add new ones, dedup by content_id + season_number + episode_number.
+      if (episodes.length > 0) {
+        const existingEps = await entities.Episode.filter({ content_id: c.id });
+        const epKeys = new Set(
+          existingEps.map((e) => `${e.season_number}-${e.episode_number}`)
+        );
+        const epsToCreate = episodes.filter(
+          (e) => !epKeys.has(`${e.season_number}-${e.episode_number}`)
+        );
+        if (epsToCreate.length > 0) {
+          await entities.Episode.bulkCreate(
+            epsToCreate.map((e) => ({
+              content_id: c.id,
+              tmdb_id: e.tmdb_id,
+              season_number: e.season_number,
+              episode_number: e.episode_number,
+              title: e.title,
+              description: e.description || "",
+              airdate: e.airdate || "",
+              runtime: e.runtime || 0,
+              image_url: e.image_url || "",
+            }))
+          );
+          episodesAdded += epsToCreate.length;
+        }
+      }
 
       // Keep library item poster/title in sync.
       const libItems = await entities.LibraryItem.filter({ content_id: c.id });

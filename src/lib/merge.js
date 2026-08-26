@@ -1,140 +1,158 @@
-// Merge engine — combines two content records into one without losing user data.
+// Merge engine — links two contents via a shared Franchise without destroying either record.
 import { entities } from "@/lib/api";
 
-// Merge `secondaryId` into `primaryId`. The primary record is kept as the definitive reference.
+/**
+ * Merge `secondaryId` into a shared franchise with `primaryId`.
+ *
+ * Unlike a destructive merge, this operation:
+ * - Keeps BOTH Content records intact (seasons, episodes, progress, library items, trophies)
+ * - Links both to the same Franchise via FranchiseContent
+ * - Does NOT delete the secondary Content
+ * - Does NOT move data between contents
+ *
+ * The result is that both contents appear together on the FranchiseDetail page
+ * and remain individually clickable/openable.
+ */
 export async function mergeContents(primaryId, secondaryId) {
-  if (primaryId === secondaryId) throw new Error("Cannot merge a content with itself.");
+  if (primaryId === secondaryId) {
+    throw new Error("Cannot merge a content with itself.");
+  }
 
   const [primary, secondary] = await Promise.all([
     entities.Content.get(primaryId),
     entities.Content.get(secondaryId),
   ]);
-  if (!primary || !secondary) throw new Error("One or both contents not found.");
 
-  // 1. EpisodeProgress — move secondary's progress to primary, dedupe by (season, episode).
-  const [primaryProgress, secondaryProgress] = await Promise.all([
-    entities.EpisodeProgress.filter({ content_id: secondaryId }), // secondary's
-    entities.EpisodeProgress.filter({ content_id: primaryId }),
-  ]);
-  const primaryKeys = new Set(primaryProgress.map((p) => `${p.season_number}-${p.episode_number}`));
-  for (const p of secondaryProgress) {
-    const key = `${p.season_number}-${p.episode_number}`;
-    if (primaryKeys.has(key)) {
-      // duplicate episode — drop secondary's record, keep primary's watched state
-      await entities.EpisodeProgress.delete(p.id);
-    } else {
-      await entities.EpisodeProgress.update(p.id, { content_id: primaryId });
-      primaryKeys.add(key);
-    }
+  if (!primary || !secondary) {
+    throw new Error("One or both contents not found.");
   }
 
-  // 2. Seasons — move secondary's seasons to primary, dedupe by season_number.
-  const [primarySeasons, secondarySeasons] = await Promise.all([
-    entities.Season.filter({ content_id: primaryId }),
-    entities.Season.filter({ content_id: secondaryId }),
-  ]);
-  const primarySeasonNumbers = new Set(primarySeasons.map((s) => s.season_number));
-  for (const s of secondarySeasons) {
-    if (primarySeasonNumbers.has(s.season_number)) {
-      await entities.Season.delete(s.id);
-    } else {
-      await entities.Season.update(s.id, { content_id: primaryId });
-      primarySeasonNumbers.add(s.season_number);
-    }
-  }
+  console.log("MERGE DEBUG", {
+    primaryId,
+    secondaryId,
+    primaryTitle: primary.title,
+    primaryType: primary.content_type,
+    secondaryTitle: secondary.title,
+    secondaryType: secondary.content_type,
+  });
 
-  // 3. Episodes (manual) — move secondary's stored episodes to primary, dedupe.
-  const [primaryEps, secondaryEps] = await Promise.all([
-    entities.Episode.filter({ content_id: primaryId }),
-    entities.Episode.filter({ content_id: secondaryId }),
-  ]);
-  const primaryEpKeys = new Set(primaryEps.map((e) => `${e.season_number}-${e.episode_number}`));
-  for (const e of secondaryEps) {
-    const key = `${e.season_number}-${e.episode_number}`;
-    if (primaryEpKeys.has(key)) {
-      await entities.Episode.delete(e.id);
-    } else {
-      await entities.Episode.update(e.id, { content_id: primaryId });
-      primaryEpKeys.add(key);
-    }
-  }
-
-  // 4. LibraryItem — keep primary's; if only secondary has one, reassign it.
-  const [primaryLib, secondaryLib] = await Promise.all([
-    entities.LibraryItem.filter({ content_id: primaryId }),
-    entities.LibraryItem.filter({ content_id: secondaryId }),
-  ]);
-  if (primaryLib.length === 0 && secondaryLib.length > 0) {
-    await entities.LibraryItem.update(secondaryLib[0].id, {
-      content_id: primaryId,
-      title: primary.title,
-      poster_url: primary.poster_url || secondaryLib[0].poster_url,
-      content_type: primary.content_type,
-    });
-  } else if (secondaryLib.length > 0) {
-    await entities.LibraryItem.delete(secondaryLib[0].id);
-  }
-
-  // 5. FranchiseContent — move secondary's links to primary, dedupe by franchise_id.
+  // 1. Find existing franchise links for both contents.
   const [primaryLinks, secondaryLinks] = await Promise.all([
     entities.FranchiseContent.filter({ content_id: primaryId }),
     entities.FranchiseContent.filter({ content_id: secondaryId }),
   ]);
-  const primaryFranchiseIds = new Set(primaryLinks.map((l) => l.franchise_id));
-  for (const l of secondaryLinks) {
-    if (primaryFranchiseIds.has(l.franchise_id)) {
-      await entities.FranchiseContent.delete(l.id);
-    } else {
-      await entities.FranchiseContent.update(l.id, {
-        content_id: primaryId,
-        title: primary.title,
-        poster_url: primary.poster_url || l.poster_url,
-      });
-      primaryFranchiseIds.add(l.franchise_id);
-    }
+
+  console.log("MERGE DEBUG links", {
+    primaryLinksCount: primaryLinks.length,
+    primaryFranchiseIds: primaryLinks.map((l) => l.franchise_id),
+    secondaryLinksCount: secondaryLinks.length,
+    secondaryFranchiseIds: secondaryLinks.map((l) => l.franchise_id),
+  });
+
+  // 2. Determine which franchise to use.
+  //    Priority: primary's existing franchise > secondary's existing franchise > create new.
+  let targetFranchiseId = null;
+
+  if (primaryLinks.length > 0) {
+    targetFranchiseId = primaryLinks[0].franchise_id;
+  } else if (secondaryLinks.length > 0) {
+    targetFranchiseId = secondaryLinks[0].franchise_id;
+  } else {
+    // Create a new franchise named after the primary content.
+    const franchise = await entities.Franchise.create({
+      name: primary.title,
+      description: "",
+      poster_url: primary.backdrop_url || primary.poster_url || "",
+    });
+    targetFranchiseId = franchise.id;
   }
 
-  // 6. Trophies — repoint any trophy tied to the secondary content to the primary.
-  const secondaryTrophies = await entities.Trophy.filter({ condition_content_id: secondaryId });
-  for (const t of secondaryTrophies) {
-    await entities.Trophy.update(t.id, {
-      condition_content_id: primaryId,
-      condition_content_title: primary.title,
+  console.log("MERGE DEBUG franchise", { targetFranchiseId });
+
+  // 3. Ensure primary is linked to the target franchise.
+  const primaryAlreadyLinked = primaryLinks.some(
+    (l) => l.franchise_id === targetFranchiseId
+  );
+
+  if (!primaryAlreadyLinked) {
+    await entities.FranchiseContent.create({
+      franchise_id: targetFranchiseId,
+      content_id: primaryId,
     });
   }
 
-  // 7. Fill missing metadata on primary from secondary (never overwrite existing values).
-  const fill = {};
-  if (!primary.summary && secondary.summary) fill.summary = secondary.summary;
-  if (!primary.poster_url && secondary.poster_url) fill.poster_url = secondary.poster_url;
-  if (!primary.backdrop_url && secondary.backdrop_url) fill.backdrop_url = secondary.backdrop_url;
-  if ((!primary.genres || primary.genres.length === 0) && secondary.genres?.length) fill.genres = secondary.genres;
-  if (!primary.network && secondary.network) fill.network = secondary.network;
-  if (!primary.language && secondary.language) fill.language = secondary.language;
-  if (!primary.country && secondary.country) fill.country = secondary.country;
-  if (!primary.release_date && secondary.release_date) fill.release_date = secondary.release_date;
-  if (!primary.original_title && secondary.original_title) fill.original_title = secondary.original_title;
-  if ((!primary.rating || primary.rating === 0) && secondary.rating) fill.rating = secondary.rating;
-  if ((!primary.total_episodes || primary.total_episodes === 0) && secondary.total_episodes)
-    fill.total_episodes = secondary.total_episodes;
-  if ((!primary.total_seasons || primary.total_seasons === 0) && secondary.total_seasons)
-    fill.total_seasons = secondary.total_seasons;
-  if (Object.keys(fill).length > 0) await entities.Content.update(primaryId, fill);
+  // 4. Ensure secondary is linked to the same franchise.
+  const secondaryAlreadyLinked = secondaryLinks.some(
+    (l) => l.franchise_id === targetFranchiseId
+  );
 
-  // 8. Delete the secondary content record.
-  await entities.Content.delete(secondaryId);
+  if (!secondaryAlreadyLinked) {
+    await entities.FranchiseContent.create({
+      franchise_id: targetFranchiseId,
+      content_id: secondaryId,
+    });
+  }
 
-  // 9. Record merge history.
+  // 5. Remove stale franchise links from secondary that point to other franchises.
+  //    (secondary should only be in the target franchise now)
+  for (const l of secondaryLinks) {
+    if (l.franchise_id !== targetFranchiseId) {
+      await entities.FranchiseContent.delete(l.id);
+    }
+  }
+
+  // 6. Record merge history (merge_history only has: id, created_date, merge_date, merged_content_ids).
   await entities.MergeHistory.create({
-    primary_content_id: primaryId,
-    primary_title: primary.title,
-    merged_content_ids: [secondaryId],
-    merged_titles: [secondary.title],
+    merged_content_ids: [primaryId, secondaryId],
+  });
+
+  // 7. Verify final state.
+  const finalPrimaryLinks = await entities.FranchiseContent.filter({ content_id: primaryId });
+  const finalSecondaryLinks = await entities.FranchiseContent.filter({ content_id: secondaryId });
+
+  const [primarySeasons, primaryProgress] = await Promise.all([
+    entities.Season.filter({ content_id: primaryId }),
+    entities.EpisodeProgress.filter({ content_id: primaryId }),
+  ]);
+
+  const [secondarySeasons, secondaryProgress] = await Promise.all([
+    entities.Season.filter({ content_id: secondaryId }),
+    entities.EpisodeProgress.filter({ content_id: secondaryId }),
+  ]);
+
+  console.log("MERGE RESULT", {
+    primaryId,
+    secondaryId,
+    primaryFranchiseLinks: finalPrimaryLinks.map((l) => l.franchise_id),
+    secondaryFranchiseLinks: finalSecondaryLinks.map((l) => l.franchise_id),
+    primarySeasonsCount: primarySeasons.length,
+    primaryProgressCount: primaryProgress.length,
+    secondarySeasonsCount: secondarySeasons.length,
+    secondaryProgressCount: secondaryProgress.length,
+    primaryStillExists: true,
+    secondaryStillExists: true,
   });
 
   return { primary, secondary };
 }
 
 export async function getMergeHistory() {
-  return await entities.MergeHistory.list("-created_date", 100);
+  const records = await entities.MergeHistory.list("-created_date", 100);
+
+  // Resolve content titles from stored IDs.
+  const allIds = [...new Set(records.flatMap((r) => r.merged_content_ids || []))];
+  const titleMap = {};
+  for (const id of allIds) {
+    try {
+      const c = await entities.Content.get(id);
+      titleMap[id] = c?.title || id;
+    } catch {
+      titleMap[id] = id;
+    }
+  }
+
+  return records.map((r) => ({
+    ...r,
+    resolved_titles: (r.merged_content_ids || []).map((id) => titleMap[id] || id),
+  }));
 }

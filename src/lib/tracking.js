@@ -155,25 +155,39 @@ export async function loadAllProgressGrouped(libraryItems) {
   return map;
 }
 
-/* ---------- ensure content + seasons persisted when added to library ---------- */
+/* ---------- ensure content + seasons + episodes persisted ---------- */
 
 export async function ensureContentPersisted(detail) {
-  const { show, seasons = [] } = detail;
+  const {
+    show,
+    seasons = [],
+    episodes = [],
+    existingContentId,
+  } = detail;
 
-  const existing = show?.tmdb_id
-    ? await entities.Content.filter({
-        tmdb_id: show.tmdb_id,
-      })
-    : [];
+  const isFilm = show?.content_type === "FILM";
+
+  let existing = [];
+
+  if (existingContentId) {
+    const byId = await entities.Content.get(existingContentId).catch(() => null);
+    if (byId) existing = [byId];
+  }
+
+  if (existing.length === 0 && show?.tmdb_id) {
+    existing = await entities.Content.filter({
+      tmdb_id: show.tmdb_id,
+    });
+  }
 
   let contentId;
 
   if (existing.length > 0) {
     contentId = existing[0].id;
 
-    await entities.Content.update(contentId, {
-      total_seasons: show.total_seasons,
-      total_episodes: show.total_episodes,
+    const updatePayload = {
+      total_seasons: isFilm ? 1 : show.total_seasons,
+      total_episodes: isFilm ? 1 : show.total_episodes,
       content_type:
         show.content_type ||
         existing[0].content_type ||
@@ -182,8 +196,14 @@ export async function ensureContentPersisted(detail) {
       provider: "TMDB",
       provider_id: show.tmdb_id
         ? String(show.tmdb_id)
-        : "",
-    });
+        : existing[0].provider_id || "",
+    };
+
+    if (show.tmdb_id && !existing[0].tmdb_id) {
+      updatePayload.tmdb_id = show.tmdb_id;
+    }
+
+    await entities.Content.update(contentId, updatePayload);
   } else {
     const created = await entities.Content.create({
       tmdb_id: show.tmdb_id,
@@ -201,9 +221,18 @@ export async function ensureContentPersisted(detail) {
       language: show.language,
       country: show.country,
       release_date: show.release_date,
-      total_seasons: show.total_seasons,
-      total_episodes: show.total_episodes,
-      content_type: show.content_type || "TV_SERIES",
+
+      total_seasons: isFilm
+        ? 1
+        : show.total_seasons,
+
+      total_episodes: isFilm
+        ? 1
+        : show.total_episodes,
+
+      content_type:
+        show.content_type || "TV_SERIES",
+
       source: "TMDB",
       provider: "TMDB",
       provider_id: show.tmdb_id
@@ -214,7 +243,132 @@ export async function ensureContentPersisted(detail) {
     contentId = created.id;
   }
 
-  /* ---------- persist seasons ---------- */
+  /* ---------- FILM: virtual Season 1 + Episode 1 ---------- */
+
+  if (isFilm) {
+    const existingSeasons =
+      await entities.Season.filter({
+        content_id: contentId,
+      });
+
+    let filmSeason =
+      existingSeasons.find(
+        (season) =>
+          Number(season.season_number) === 1
+      ) || null;
+
+    const wrongSeason =
+      !filmSeason
+        ? existingSeasons.find(
+            (season) =>
+              Number(season.season_number) === 0
+          )
+        : null;
+
+    if (wrongSeason && !filmSeason) {
+      await entities.Season.update(
+        wrongSeason.id,
+        {
+          season_number: 1,
+          title: "Film",
+          episode_count: 1,
+          poster_url:
+            wrongSeason.poster_url ||
+            show.poster_url ||
+            "",
+        }
+      );
+      filmSeason = { ...wrongSeason, season_number: 1 };
+    }
+
+    if (!filmSeason) {
+      filmSeason = await entities.Season.create({
+        content_id: contentId,
+        tmdb_id: null,
+        season_number: 1,
+        title: "Film",
+        episode_count: 1,
+        poster_url:
+          show.poster_url || "",
+        source: "TMDB",
+      });
+    } else if (
+      Number(filmSeason.episode_count) !== 1
+    ) {
+      filmSeason = await entities.Season.update(
+        filmSeason.id,
+        {
+          episode_count: 1,
+          title: filmSeason.title || "Film",
+          poster_url:
+            filmSeason.poster_url ||
+            show.poster_url ||
+            "",
+        }
+      );
+    }
+
+    for (const extra of existingSeasons) {
+      if (Number(extra.season_number) !== 1) {
+        await entities.Season.delete(extra.id);
+      }
+    }
+
+    const existingEpisodes =
+      await entities.Episode.filter({
+        content_id: contentId,
+      });
+
+    let filmEpisode =
+      existingEpisodes.find(
+        (episode) =>
+          Number(episode.season_number) === 1 &&
+          Number(episode.episode_number) === 1
+      );
+
+    if (!filmEpisode) {
+      filmEpisode = await entities.Episode.create({
+        content_id: contentId,
+        tmdb_id: show.tmdb_id,
+        season_number: 1,
+        episode_number: 1,
+        title: show.title,
+        description: show.summary || "",
+        airdate: show.release_date || "",
+        runtime: show.runtime || 0,
+        image_url:
+          show.poster_url || "",
+      });
+    }
+
+    for (const extra of existingEpisodes) {
+      if (
+        Number(extra.season_number) !== 1 ||
+        Number(extra.episode_number) !== 1
+      ) {
+        await entities.Episode.delete(extra.id);
+      }
+    }
+
+    const verifyEpisodes = await entities.Episode.filter({
+      content_id: contentId,
+    });
+
+    const verifySeasons = await entities.Season.filter({
+      content_id: contentId,
+    });
+
+    console.log("FILM EPISODE CREATED DEBUG", {
+      contentId,
+      itemContentId: existingContentId || null,
+      episodes: verifyEpisodes,
+      seasons: verifySeasons,
+    });
+
+    return contentId;
+  }
+
+  /* ---------- persist TV / ANIME seasons ---------- */
 
   const existingSeasons =
     await entities.Season.filter({
@@ -248,6 +402,45 @@ export async function ensureContentPersisted(detail) {
     );
   }
 
+  /* ---------- persist TV / ANIME episodes ---------- */
+
+  if (episodes.length > 0) {
+    const existingEpisodes =
+      await entities.Episode.filter({
+        content_id: contentId,
+      });
+
+    const existingEpKeys = new Set(
+      existingEpisodes.map(
+        (ep) =>
+          `${ep.season_number}-${ep.episode_number}`
+      )
+    );
+
+    const epsToCreate = episodes.filter(
+      (ep) =>
+        !existingEpKeys.has(
+          `${ep.season_number}-${ep.episode_number}`
+        )
+    );
+
+    if (epsToCreate.length > 0) {
+      await entities.Episode.bulkCreate(
+        epsToCreate.map((ep) => ({
+          content_id: contentId,
+          tmdb_id: ep.tmdb_id,
+          season_number: ep.season_number,
+          episode_number: ep.episode_number,
+          title: ep.title,
+          description: ep.description || "",
+          airdate: ep.airdate || "",
+          runtime: ep.runtime || 0,
+          image_url: ep.image_url || "",
+        }))
+      );
+    }
+  }
+
   return contentId;
 }
 
@@ -272,8 +465,14 @@ export function showFromContentRecord(c) {
     release_date: c.release_date || "",
     content_type: c.content_type || "TV_SERIES",
     source: c.source || "TMDB",
-    total_seasons: c.total_seasons || 0,
-    total_episodes: c.total_episodes || 0,
+    total_seasons:
+      c.content_type === "FILM"
+        ? 1
+        : c.total_seasons || 0,
+    total_episodes:
+      c.content_type === "FILM"
+        ? 1
+        : c.total_episodes || 0,
   };
 }
 
@@ -288,11 +487,12 @@ export async function setEpisodeWatched(
   const normalizedSeason = Number(seasonNumber);
   const normalizedEpisode = Number(episodeNumber);
 
-  const matches = await entities.EpisodeProgress.filter({
-    content_id: contentId,
-    season_number: normalizedSeason,
-    episode_number: normalizedEpisode,
-  });
+  const matches =
+    await entities.EpisodeProgress.filter({
+      content_id: contentId,
+      season_number: normalizedSeason,
+      episode_number: normalizedEpisode,
+    });
 
   if (watched) {
     if (matches.length === 0) {
@@ -305,7 +505,9 @@ export async function setEpisodeWatched(
     }
   } else {
     for (const match of matches) {
-      await entities.EpisodeProgress.delete(match.id);
+      await entities.EpisodeProgress.delete(
+        match.id
+      );
     }
   }
 }
@@ -329,7 +531,9 @@ export async function setSeasonWatched(
     });
 
   const existingNums = new Set(
-    existing.map((p) => Number(p.episode_number))
+    existing.map((p) =>
+      Number(p.episode_number)
+    )
   );
 
   if (watched) {
@@ -348,7 +552,8 @@ export async function setSeasonWatched(
         episode_number: Number(
           episode.episode_number
         ),
-        watched_date: new Date().toISOString(),
+        watched_date:
+          new Date().toISOString(),
       }));
 
     if (toCreate.length > 0) {
@@ -367,7 +572,9 @@ export async function setSeasonWatched(
 
 /* ---------- sync after a change: status + trophies ---------- */
 
-export async function syncContentStatus(contentId) {
+export async function syncContentStatus(
+  contentId
+) {
   const [
     seasons,
     progress,
@@ -519,8 +726,12 @@ export async function reevaluateAllTrophies() {
 
   const completedSet = new Set(
     results
-      .filter((result) => result.completed)
-      .map((result) => result.contentId)
+      .filter(
+        (result) => result.completed
+      )
+      .map(
+        (result) => result.contentId
+      )
   );
 
   const newlyUnlocked = [];

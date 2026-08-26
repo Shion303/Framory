@@ -42,7 +42,9 @@ function sortRecords(records, sort) {
 
 export function createCollection(entityName) {
   const tableName = getTableName(entityName);
-  const hasUpdatedDate = entityName !== "EpisodeProgress";
+  const hasUpdatedDate =
+    entityName === "Content" ||
+    entityName === "LibraryItem";
 
   return {
     async list(sort, limit) {
@@ -185,10 +187,7 @@ export function createCollection(entityName) {
       let request = supabase.from(tableName).delete();
 
       if (Object.keys(query).length === 0) {
-        request = request.gte(
-          "created_date",
-          "0000-01-01T00:00:00.000Z"
-        );
+        request = request.not("id", "is", null);
       } else {
         for (const [key, value] of Object.entries(query)) {
           request = request.eq(key, value);

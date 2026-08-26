@@ -110,7 +110,7 @@ export function MergeContent({ open, onClose, onDone }) {
         <div className="flex items-center justify-between p-5 border-b border-border">
           <div className="flex items-center gap-2">
             <GitMerge className="w-5 h-5 text-primary" />
-            <h3 className="text-lg font-semibold">Merge Content</h3>
+            <h3 className="text-lg font-semibold">Link Contents</h3>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-secondary"><X className="w-5 h-5" /></button>
         </div>
@@ -119,15 +119,16 @@ export function MergeContent({ open, onClose, onDone }) {
           {done ? (
             <div className="text-center py-8">
               <Check className="w-12 h-12 text-primary mx-auto mb-3" />
-              <p className="text-lg font-semibold mb-1">Merge complete</p>
-              <p className="text-sm text-muted-foreground">"{primary?.title}" is now the definitive record.</p>
-              <button onClick={reset} className="mt-5 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium">Merge another</button>
+              <p className="text-lg font-semibold mb-1">Link complete</p>
+              <p className="text-sm text-muted-foreground">Both contents are now linked in the same franchise.</p>
+              <p className="text-xs text-muted-foreground mt-2">Open the franchise page to see both contents together.</p>
+              <button onClick={reset} className="mt-5 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium">Link another</button>
             </div>
           ) : confirming ? (
             <div>
-              <div className="flex items-start gap-2 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 mb-4">
-                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-sm text-amber-200/90">This operation is irreversible. The merged record will be deleted; all your progress, library, franchise and trophy data is preserved on the kept record.</p>
+              <div className="flex items-start gap-2 p-4 rounded-2xl bg-blue-500/10 border border-blue-500/30 mb-4">
+                <AlertTriangle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-blue-200/90">Both contents will remain as separate records. They will be linked together in a shared franchise. No data will be moved or deleted.</p>
               </div>
               <p className="text-sm text-muted-foreground mb-3">You are about to merge:</p>
               <div className="flex items-center gap-3 mb-4">
@@ -143,10 +144,10 @@ export function MergeContent({ open, onClose, onDone }) {
                 <p className="text-xs text-muted-foreground">Keep as primary:</p>
                 <p className="text-sm font-semibold text-primary">{primary?.title}</p>
               </div>
-              <p className="text-xs text-muted-foreground mb-4">This may modify: seasons, episodes, library data, tracking, franchise relationships, trophies.</p>
+              <p className="text-xs text-muted-foreground mb-4">Both contents will keep their own seasons, episodes, progress, library data and trophies. They will appear together on the franchise page.</p>
               <div className="flex gap-3">
                 <button onClick={() => setConfirming(false)} className="flex-1 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium">Cancel</button>
-                <button onClick={executeMerge} disabled={merging} className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">{merging ? "Merging…" : "Confirm Merge"}</button>
+                <button onClick={executeMerge} disabled={merging} className="flex-1 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">{merging ? "Linking…" : "Confirm Link"}</button>
               </div>
             </div>
           ) : (
@@ -157,23 +158,23 @@ export function MergeContent({ open, onClose, onDone }) {
 
               {canMerge && (
                 <div className="mt-4">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Which record should be kept as the primary reference?</p>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Which franchise should be used?</p>
                   <div className="grid grid-cols-2 gap-2">
                     <button onClick={() => setKeep("source")} className={`p-3 rounded-xl border text-left transition ${keep === "source" ? "border-primary bg-primary/10 ring-1 ring-primary/60" : "border-border bg-secondary"}`}>
-                      <p className="text-xs text-muted-foreground">Keep</p>
+                      <p className="text-xs text-muted-foreground">Use franchise from</p>
                       <p className="text-sm font-semibold truncate">{source.title}</p>
                     </button>
                     <button onClick={() => setKeep("target")} className={`p-3 rounded-xl border text-left transition ${keep === "target" ? "border-primary bg-primary/10 ring-1 ring-primary/60" : "border-border bg-secondary"}`}>
-                      <p className="text-xs text-muted-foreground">Keep</p>
+                      <p className="text-xs text-muted-foreground">Use franchise from</p>
                       <p className="text-sm font-semibold truncate">{target.title}</p>
                     </button>
                   </div>
                   <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
                     <ArrowRight className="w-4 h-4 text-primary" />
-                    <span><span className="text-foreground font-medium">{secondary.title}</span> will be merged into <span className="text-primary font-medium">{primary.title}</span></span>
+                    <span><span className="text-foreground font-medium">{secondary.title}</span> will be linked to <span className="text-primary font-medium">{primary.title}</span> in a shared franchise</span>
                   </div>
                   <button onClick={() => setConfirming(true)} className="w-full mt-4 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-primary-foreground font-medium hover:opacity-90 transition">
-                    <GitMerge className="w-4 h-4" /> Review & Confirm
+                    <GitMerge className="w-4 h-4" /> Link Contents
                   </button>
                 </div>
               )}

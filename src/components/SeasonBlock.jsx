@@ -20,6 +20,15 @@ export function SeasonBlock({
     (e) => Number(e.season_number) === Number(season.season_number)
   );
 
+  console.log("SEASON DEBUG", {
+    seasonNumber: season.season_number,
+    seasonTitle: season.title,
+    episodeCount: season.episode_count,
+    episodesPropCount: episodes.length,
+    episodesSeasonNumbers: episodes.map((e) => Number(e.season_number)),
+    seasonEpisodesCount: seasonEpisodes.length,
+  });
+
   function handleEpisodeClick(ep, watched) {
     if (disabled) return;
     onToggleEpisode(ep, watched);

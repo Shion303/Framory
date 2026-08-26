@@ -174,7 +174,7 @@ function normalizeShow(show, mediaType = "tv") {
 
       source: "TMDB",
 
-      total_seasons: 0,
+      total_seasons: 1,
 
       total_episodes: 1,
     };
@@ -451,8 +451,8 @@ export async function getShowDetail(
    */
   if (mediaType === "movie") {
     const virtualSeason = {
-      tmdb_id: show.tmdb_id,
-      season_number: 0,
+      tmdb_id: null,
+      season_number: 1,
       title: "Film",
       episode_count: 1,
       poster_url: show.poster_url,
@@ -460,13 +460,13 @@ export async function getShowDetail(
 
     const virtualEpisode = {
       tmdb_id: show.tmdb_id,
-      season_number: 0,
+      season_number: 1,
       episode_number: 1,
       title: show.title,
-      description: show.summary,
+      description: show.summary || "",
       airdate: show.release_date || "",
       runtime: 0,
-      image_url: show.poster_url,
+      image_url: show.poster_url || "",
     };
 
     show.total_seasons = 1;

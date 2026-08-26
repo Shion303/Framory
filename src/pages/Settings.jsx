@@ -61,8 +61,8 @@ export default function Settings() {
               className="flex flex-col items-center gap-2 p-5 rounded-2xl border border-border bg-card hover:ring-1 hover:ring-primary/60 transition"
             >
               <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center"><GitMerge className="w-5 h-5 text-primary" /></div>
-              <span className="text-sm font-medium">Merge Content</span>
-              <span className="text-[11px] text-muted-foreground text-center">Combine duplicate records into one.</span>
+              <span className="text-sm font-medium">Link Contents</span>
+              <span className="text-[11px] text-muted-foreground text-center">Link two contents together in a franchise.</span>
             </button>
           </div>
           <SyncDatabase />
