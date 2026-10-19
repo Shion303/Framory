@@ -15,6 +15,42 @@ const NO_TITLE = "Titolo non disponibile";
 const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>?/gm, "").replace(/&(?:[a-z]+|#\d+);/gi, " ").replace(/\s+/g, " ").trim();
 
 const text = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
+const asList = (x) => (Array.isArray(x) ? x : x && typeof x === "object" ? Object.values(x) : []);
+
+// Sanitizza le schede PRIMA di passarle allo stato React: key mai undefined,
+// array sempre definiti, titolo sempre stringa. Non lancia mai eccezioni.
+function sanitizeStores(franchises, entries) {
+  const fm = {}, em = {};
+  for (const r of asList(franchises)) {
+    if (!r || typeof r !== "object") continue;
+    const id = r.id || r.fid || null;
+    if (!id) continue;
+    fm[id] = {
+      ...r,
+      id,
+      title: text(r.title) || "Senza Titolo",
+      cover: text(r.cover),
+      parts: asList(r.parts).filter(Boolean),
+    };
+  }
+  for (const r of asList(entries)) {
+    if (!r || typeof r !== "object") continue;
+    const fid = r.franchiseId || r.id || null;
+    if (!fid) continue;
+    em[fid] = {
+      ...r,
+      franchiseId: fid,
+      status: r.status ?? null,
+      checked: asList(r.checked).filter(Boolean),
+      removed: asList(r.removed).filter(Boolean),
+      order: asList(r.order).filter(Boolean),
+      partOrder: asList(r.partOrder).filter(Boolean),
+      addedAt: Number(r.addedAt) || Date.now(),
+      updatedAt: Number(r.updatedAt) || Date.now(),
+    };
+  }
+  return { fm, em };
+}
 
 function normalizeMedia(item) {
   if (!item || typeof item !== "object") return null;
@@ -143,15 +179,16 @@ export default function App() {
     const remote = normalizeDoc(remoteDoc);
     const local = buildDoc(fRef.current, eRef.current, deletedRef.current, 0);
     const merged = mergeDocs(local, remote);
-    const stores = docToStores(merged);
+    const mapped = docToStores(merged);
+    const stores = sanitizeStores(mapped.franchises, mapped.entries);
     deletedRef.current = merged.deleted;
     docTs.current = Math.max(docTs.current, merged.updatedAt);
-    fRef.current = stores.franchises;
-    eRef.current = stores.entries;
-    setFranchises({ ...stores.franchises });
-    setEntries({ ...stores.entries });
+    fRef.current = stores.fm;
+    eRef.current = stores.em;
+    setFranchises({ ...stores.fm });
+    setEntries({ ...stores.em });
     setLastSync(Date.now());
-    persistStores(stores.franchises, stores.entries);
+    persistStores(stores.fm, stores.em);
     if (docSignature(merged) !== docSignature(remote)) schedulePush();
   }, [persistStores, schedulePush]);
 
@@ -161,14 +198,15 @@ export default function App() {
     syncRef.current = true;
     setSyncing(true);
     try {
-      const settled = Object.values(fRef.current).filter((f) => f && !f.pending);
-      const { changed } = await syncLibrary(settled);
-      if (changed.length) {
+      const settled = Object.values(fRef.current).filter((f) => f && f.id && !f.pending);
+      const { changed = [] } = (await syncLibrary(settled)) || {};
+      const fresh = (Array.isArray(changed) ? changed : []).filter((f) => f && f.id);
+      if (fresh.length) {
         const next = { ...fRef.current };
-        for (const fr of changed) next[fr.id] = fr;
+        for (const fr of fresh) next[fr.id] = fr;
         fRef.current = next;
         setFranchises({ ...next });
-        showToast(auto ? `WatchList aggiornata (${changed.length})` : `Sincronizzato (${changed.length})`);
+        showToast(auto ? `WatchList aggiornata (${fresh.length})` : `Sincronizzato (${fresh.length})`);
         schedulePush();
       } else if (!auto) {
         showToast("Tutto aggiornato");
@@ -186,34 +224,43 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // --- 1) IndexedDB: nessuna eccezione può far crollare il render ---
       let fm = {}, em = {}, ls = null;
       try {
         const [fr, er, lsr] = await db.transaction("r", db.franchises, db.entries, db.meta, () =>
           Promise.all([db.franchises.toArray(), db.entries.toArray(), db.meta.get("lastSync")]),
         );
-        fr.forEach((r) => { fm[r.id] = r; });
-        er.forEach((r) => { em[r.franchiseId] = r; });
+        const local = sanitizeStores(fr, er);
+        fm = local.fm; em = local.em;
         ls = lsr?.value || null;
-      } catch (e) { console.error("[load]", e); }
+      } catch (e) {
+        console.error("[load] indexeddb", e);
+        fm = {}; em = {};
+      }
       if (cancelled) return;
 
+      // --- 2) Cloud: se il pull fallisce si continua OFFLINE con i dati locali ---
       let needsPush = false;
+      let offlineNotice = false;
       if (syncEnabled) {
         setSyncState("connecting");
-        const remote = await pullLibrary();
+        const pull = await pullLibrary();
         if (cancelled) return;
+        const remote = pull?.ok ? pull?.doc : null;
+        if (!pull?.ok && pull?.error !== "not-configured") { offlineNotice = true; setSyncState("error"); }
         if (remote) {
           const remoteDoc = normalizeDoc(remote);
           const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), remoteDoc);
-          const stores = docToStores(merged);
-          fm = stores.franchises; em = stores.entries;
+          const mapped = docToStores(merged);
+          const stores = sanitizeStores(mapped.franchises, mapped.entries);
+          fm = stores.fm; em = stores.em;
           deletedRef.current = merged.deleted;
           docTs.current = merged.updatedAt;
           persistStores(fm, em);
           setSyncState("online");
           // Se lo stato locale conteneva dati non ancora sul cloud, li riscrive subito.
           needsPush = docSignature(merged) !== docSignature(remoteDoc);
-        } else {
+        } else if (!offlineNotice) {
           needsPush = Boolean(Object.keys(fm).length || Object.keys(em).length);
           setSyncState("online");
         }
@@ -226,6 +273,8 @@ export default function App() {
       setLastSync(ls);
       setReady(true);
 
+      // Fallback offline non bloccante: i dati di IndexedDB restano pienamente usabili.
+      if (offlineNotice) showToast("Sync cloud non disponibile — si lavora in locale");
       if (syncEnabled && needsPush) schedulePush();
       setTimeout(() => { if (!cancelled) runSync(true); }, 350);
     })();
@@ -519,7 +568,7 @@ class ErrorBoundary extends React.Component {
     return { error: null, lastKey: props.resetKey };
   }
   componentDidCatch(error, info) {
-    console.warn("[render]", error, info?.componentStack);
+    console.error("[render] Errore intercettato dall'ErrorBoundary", error, info);
     if (typeof window !== "undefined" && window.__framoryErrors) window.__framoryErrors.push({ error, info });
   }
   reset = () => { this.setState({ error: null }); this.props.onReset?.(); };

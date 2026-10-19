@@ -51,15 +51,17 @@ async function ensureSession() {
   } catch (e) { console.warn("[supabase] session", e); return false; }
 }
 
-// Legge la libreria più recente. Ritorna il doc JSON oppure null.
+// Legge la libreria più recente. Ritorna { ok, doc, error } così il chiamante
+// distingue "riga assente" da "rete/credenziali non disponibili" (→ fallback locale).
 export async function pullLibrary() {
-  if (!supabase) return null;
+  if (!supabase) return { ok: false, doc: null, error: "not-configured" };
   try {
     await ensureSession();
     const { data, error } = await supabase.from(TABLE).select("data").eq("id", SYNC_ID).maybeSingle();
-    if (error) { console.warn("[supabase] pull", error.message); return null; }
-    return data?.data || null;
-  } catch (e) { console.warn("[supabase] pull", e); return null; }
+    if (error) { console.warn("[supabase] pull", error.message); return { ok: false, doc: null, error: error.message }; }
+    const doc = data && typeof data === "object" ? data.data || null : null;
+    return { ok: true, doc };
+  } catch (e) { console.warn("[supabase] pull", e); return { ok: false, doc: null, error: String(e?.message || e) }; }
 }
 
 // Upsert immediato dell'intera libreria sulla riga condivisa.
