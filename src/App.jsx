@@ -14,22 +14,25 @@ const NO_TITLE = "Titolo non disponibile";
 
 const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>?/gm, "").replace(/&(?:[a-z]+|#\d+);/gi, " ").replace(/\s+/g, " ").trim();
 
+const text = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
+
 function normalizeMedia(item) {
   if (!item || typeof item !== "object") return null;
-  const title = (item?.title?.english || item?.title?.userPreferred || item?.title?.romaji || item?.title || "").trim();
+  const t = item?.title;
+  const title = text(t?.english || t?.userPreferred || t?.romaji || (typeof t === "string" ? t : item?.name)).trim();
   if (!title) return null;
   return {
-    id: item?.id || null,
-    malId: item?.malId ?? null,
+    id: item?.id ?? item?.mal_id ?? null,
+    malId: item?.malId ?? item?.mal_id ?? null,
     alId: item?.alId ?? null,
     title,
     titles: Array.isArray(item?.titles) ? item.titles.filter(Boolean) : [title],
-    cover: item?.cover || item?.coverImage?.large || item?.images?.jpg?.image_url || "",
-    banner: item?.banner || "",
+    cover: text(item?.cover || item?.coverImage?.large || item?.images?.jpg?.large_image_url || item?.images?.jpg?.image_url),
+    banner: text(item?.banner),
     synopsis: stripTags(item?.synopsis || item?.description),
     episodes: Number.isFinite(item?.episodes) ? item.episodes : 0,
-    format: item?.format || "TV",
-    status: item?.status || "",
+    format: text(item?.format) || "TV",
+    status: text(item?.status),
     year: item?.year ?? null,
     score: item?.score ?? null,
     members: item?.members ?? 0,
@@ -46,16 +49,17 @@ function normalizeGroup(gr) {
   const rep = normalizeMedia(gr.rep) || members[0] || null;
   const memberIds = (Array.isArray(gr.memberIds) ? gr.memberIds : members.map((m) => m.id)).filter(Boolean);
   if (!memberIds.length) return null;
+  const first = members[0];
   return {
     key: gr.key,
     rep: rep || { title: NO_TITLE, cover: "" },
     memberIds,
-    members: members.length ? members : [],
-    preview: (Array.isArray(gr.preview) ? gr.preview : []).filter(Boolean).slice(0, 6),
-    title: rep?.title || members[0]?.title || gr.title || NO_TITLE,
-    cover: rep?.cover || members[0]?.cover || "",
-    synopsis: rep?.synopsis || members[0]?.synopsis || "",
-    year: rep?.year ?? members[0]?.year ?? null,
+    members,
+    preview: (Array.isArray(gr.preview) ? gr.preview : []).filter(Boolean).map(text).slice(0, 6),
+    title: rep?.title || first?.title || text(gr.title) || NO_TITLE,
+    cover: rep?.cover || first?.cover || "",
+    synopsis: rep?.synopsis || first?.synopsis || "",
+    year: rep?.year ?? first?.year ?? null,
   };
 }
 
@@ -679,13 +683,15 @@ function DiscoveryTab({ search = "", setSearch, groups = [], searching = false, 
 
         {state === "prompt" && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
 
-        {state === "empty" && <Empty icon={Search} title="Nessun risultato trovato" desc="Prova con un altro titolo." />}
+        {state === "empty" && (
+          <Empty icon={Search} title="Nessun risultato trovato" desc="Nessun risultato trovato o servizio momentaneamente non disponibile." />
+        )}
 
         {state === "error" && (
           <Empty
             icon={AlertTriangle}
-            title="Ricerca non riuscita"
-            desc="Controlla la connessione e riprova."
+            title="Nessun risultato trovato"
+            desc="Nessun risultato trovato o servizio momentaneamente non disponibile."
             action={<button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button>}
           />
         )}
