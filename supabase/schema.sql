@@ -28,7 +28,20 @@ exception
   when duplicate_object then null;
 end $$;
 
--- Riga iniziale della libreria condivisa
+-- updated_at autorevole lato server (indipendente dall'orologio dei dispositivi)
+create or replace function public.framory_touch_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists framory_touch_updated_at on public.watchlists;
+create trigger framory_touch_updated_at
+  before insert or update on public.watchlists
+  for each row execute function public.framory_touch_updated_at();
+
+-- Riga iniziale della libreria condivisa (stesso id usato da PC e iPhone)
 insert into public.watchlists (id, data)
-values ('framory-global', '{}'::jsonb)
+values ('global_user_watchlist', '{}'::jsonb)
 on conflict (id) do nothing;

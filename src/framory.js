@@ -101,11 +101,18 @@ async function jikanFetch(path, signal) {
   if (!res.ok) throw new Error(`jikan ${res.status}`);
   return res.json();
 }
+const ANILIST_TOKEN = (typeof import.meta !== "undefined" && import.meta.env?.VITE_ANILIST_TOKEN) || "";
+
 async function alQuery(query, variables, signal) {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    ...(ANILIST_TOKEN ? { Authorization: `Bearer ${ANILIST_TOKEN}` } : {}),
+  };
   const res = await apiFetch("https://graphql.anilist.co", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ query, variables }),
   }, { ms: 9000, signal });
   if (!res.ok) throw new Error(`anilist ${res.status}`);
@@ -930,6 +937,17 @@ export function mergeDocs(localDoc, remoteDoc) {
 
 export function bumpDeleted(deleted, id, when = Date.now()) {
   return { ...(deleted || {}), [id]: Math.max(Number(deleted?.[id]) || 0, Number(when) || Date.now()) };
+}
+
+// Firma canonica del contenuto (ignora l'ordinamento ed il timestamp del documento).
+// Serve a capire se due doc rappresentano lo stesso stato logico: permette push
+// "solo se cambiato" e interrompe i loop di eco Realtime tra dispositivi.
+export function docSignature(doc) {
+  const d = normalizeDoc(doc);
+  const fr = d.franchises.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const en = d.entries.slice().sort((a, b) => String(a.franchiseId).localeCompare(String(b.franchiseId)));
+  const del = Object.keys(d.deleted).sort().map((k) => [k, d.deleted[k]]);
+  return JSON.stringify({ fr, en, del });
 }
 
 export {

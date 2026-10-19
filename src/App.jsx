@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, bumpDeleted } from "./framory";
+import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
@@ -8,6 +8,7 @@ const CACHE_TTL = 10 * 60 * 1000;
 const CACHE_MAX = 80;
 const SYNC_INTERVAL = 30 * 60 * 1000;
 const SYNC_CHECK = 5 * 60 * 1000;
+const PUSH_DEBOUNCE_MS = 250;
 const PART_STATE = { finished: "Uscito", airing: "In uscita", upcoming: "Prossimamente", unknown: "Data TBA" };
 const NO_TITLE = "Titolo non disponibile";
 
@@ -86,6 +87,7 @@ export default function App() {
   const docTs = useRef(0);
   const deletedRef = useRef({});
   const pushTimer = useRef(null);
+  const pushDirty = useRef(false);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -100,41 +102,54 @@ export default function App() {
     } catch (e) { console.warn("[idb] persist", e); }
   }, []);
 
-  const schedulePush = useCallback(() => {
+  // Upsert immediato (coalescato di ~250ms) dell'intera libreria sulla riga condivisa.
+  const flushPush = useCallback(async () => {
     if (!syncEnabled) return;
     clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(async () => {
-      pushTimer.current = null;
-      const ts = Date.now();
-      setSyncState("syncing");
-      const doc = buildDoc(fRef.current, eRef.current, deletedRef.current, ts);
-      const r = await pushLibrary(doc);
-      if (r.ok) {
-        docTs.current = Math.max(docTs.current, ts);
-        setSyncState("online");
-        setLastSync(Date.now());
-        db.meta.put({ key: "lastSync", value: Date.now() }).catch(() => {});
-      } else {
-        setSyncState("error");
-      }
-    }, 800);
+    pushTimer.current = null;
+    if (!pushDirty.current) return;
+    pushDirty.current = false;
+    const ts = Date.now();
+    const doc = buildDoc(fRef.current, eRef.current, deletedRef.current, ts);
+    setSyncState("syncing");
+    const r = await pushLibrary(doc);
+    if (r.ok) {
+      docTs.current = Math.max(docTs.current, ts);
+      setSyncState("online");
+      setLastSync(Date.now());
+      db.meta.put({ key: "lastSync", value: Date.now() }).catch(() => {});
+    } else {
+      pushDirty.current = true;
+      setSyncState("error");
+    }
   }, []);
 
+  const schedulePush = useCallback(() => {
+    if (!syncEnabled) return;
+    pushDirty.current = true;
+    if (pushTimer.current) return;
+    pushTimer.current = setTimeout(flushPush, PUSH_DEBOUNCE_MS);
+  }, [flushPush]);
+
+  // Fonde un documento remoto nel locale. Idempotente e indipendente dagli orologi
+  // dei dispositivi (niente confronto su Date.now tra PC e iPhone): usa solo il
+  // last-write-wins per-item. Riscrive la riga condivisa solo se lo stato unito
+  // contiene qualcosa che il remoto non ha ancora (convergenza + no loop di eco).
   const mergeRemote = useCallback((remoteDoc) => {
     const remote = normalizeDoc(remoteDoc);
-    if (remote.updatedAt <= docTs.current) return;
-    const local = buildDoc(fRef.current, eRef.current, deletedRef.current, docTs.current);
+    const local = buildDoc(fRef.current, eRef.current, deletedRef.current, 0);
     const merged = mergeDocs(local, remote);
     const stores = docToStores(merged);
     deletedRef.current = merged.deleted;
-    docTs.current = merged.updatedAt;
+    docTs.current = Math.max(docTs.current, merged.updatedAt);
     fRef.current = stores.franchises;
     eRef.current = stores.entries;
     setFranchises({ ...stores.franchises });
     setEntries({ ...stores.entries });
     setLastSync(Date.now());
     persistStores(stores.franchises, stores.entries);
-  }, [persistStores]);
+    if (docSignature(merged) !== docSignature(remote)) schedulePush();
+  }, [persistStores, schedulePush]);
 
   const runSync = useCallback(async (auto) => {
     if (syncRef.current) return;
@@ -178,21 +193,24 @@ export default function App() {
       } catch (e) { console.error("[load]", e); }
       if (cancelled) return;
 
-      let remoteMissing = false;
+      let needsPush = false;
       if (syncEnabled) {
         setSyncState("connecting");
         const remote = await pullLibrary();
         if (cancelled) return;
         if (remote) {
-          const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), normalizeDoc(remote));
+          const remoteDoc = normalizeDoc(remote);
+          const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), remoteDoc);
           const stores = docToStores(merged);
           fm = stores.franchises; em = stores.entries;
           deletedRef.current = merged.deleted;
           docTs.current = merged.updatedAt;
           persistStores(fm, em);
           setSyncState("online");
+          // Se lo stato locale conteneva dati non ancora sul cloud, li riscrive subito.
+          needsPush = docSignature(merged) !== docSignature(remoteDoc);
         } else {
-          remoteMissing = true;
+          needsPush = Boolean(Object.keys(fm).length || Object.keys(em).length);
           setSyncState("online");
         }
       }
@@ -204,7 +222,7 @@ export default function App() {
       setLastSync(ls);
       setReady(true);
 
-      if (syncEnabled && remoteMissing) schedulePush();
+      if (syncEnabled && needsPush) schedulePush();
       setTimeout(() => { if (!cancelled) runSync(true); }, 350);
     })();
     return () => { cancelled = true; };
@@ -223,20 +241,10 @@ export default function App() {
 
   useEffect(() => {
     if (!ready || !syncEnabled) return undefined;
-    const flush = () => {
-      if (document.visibilityState === "hidden" && pushTimer.current) {
-        clearTimeout(pushTimer.current);
-        pushTimer.current = null;
-        const ts = Date.now();
-        pushLibrary(buildDoc(fRef.current, eRef.current, deletedRef.current, ts)).then((r) => {
-          if (r.ok) docTs.current = Math.max(docTs.current, ts);
-          setSyncState(r.ok ? "online" : "error");
-        });
-      }
-    };
+    const flush = () => { if (document.visibilityState === "hidden") flushPush(); };
     document.addEventListener("visibilitychange", flush);
     return () => document.removeEventListener("visibilitychange", flush);
-  }, [ready]);
+  }, [ready, flushPush]);
 
   useEffect(() => {
     if (!ready) return;
@@ -500,10 +508,11 @@ export default function App() {
 }
 
 class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
+  constructor(props) { super(props); this.state = { error: null, lastKey: props.resetKey }; }
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidUpdate(prevProps) {
-    if (this.state.error && prevProps.resetKey !== this.props.resetKey) this.setState({ error: null });
+  static getDerivedStateFromProps(props, state) {
+    if (state.lastKey === props.resetKey) return null;
+    return { error: null, lastKey: props.resetKey };
   }
   componentDidCatch(error, info) {
     console.warn("[render]", error, info?.componentStack);
@@ -608,49 +617,80 @@ function Card({ x, onOpen }) {
   );
 }
 
-function DiscoveryTab({ search, setSearch, groups = [], searching, error, onRetry, onOpen }) {
-  const q = search.trim();
+function SearchField({ value, onChange }) {
+  return (
+    <div className="relative">
+      <Search className="absolute left-3.5 top-1/2 w-4 h-4 -translate-y-1/2 text-zinc-500" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        inputMode="search"
+        enterKeyHint="search"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        placeholder="Cerca anime (Jikan / AniList)"
+        className="w-full glass rounded-2xl py-3 pl-10 pr-10 text-sm outline-none transition placeholder:text-zinc-500 focus:border-violet-400/40 focus:bg-white/[0.08]"
+      />
+      {value && (
+        <button onClick={() => onChange("")} aria-label="Cancella ricerca" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-zinc-500 transition hover:text-zinc-200">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function DiscoverySkeleton() {
+  return (
+    <div className="mb-2.5 flex w-full gap-3 rounded-2xl glass p-2.5" aria-hidden="true">
+      <div className="aspect-[2/3] w-[72px] shrink-0 animate-pulse rounded-2xl bg-white/10" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2 py-1">
+        <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-white/10" />
+        <div className="h-2.5 w-1/3 animate-pulse rounded-full bg-white/[0.07]" />
+        <div className="mt-1 h-2.5 w-full animate-pulse rounded-full bg-white/[0.06]" />
+        <div className="h-2.5 w-5/6 animate-pulse rounded-full bg-white/[0.06]" />
+      </div>
+    </div>
+  );
+}
+
+function DiscoveryTab({ search = "", setSearch, groups = [], searching = false, error = false, onRetry, onOpen }) {
+  const query = String(search || "").trim();
   const list = Array.isArray(groups) ? groups : [];
-  const hasResults = list.length > 0;
+
+  let state = "idle";
+  if (searching) state = "loading";
+  else if (query.length < 3) state = "prompt";
+  else if (list.length) state = "results";
+  else state = error ? "error" : "empty";
+
   return (
     <div className="mx-auto max-w-2xl px-3 pt-4">
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 w-4 h-4 -translate-y-1/2 text-zinc-500" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          inputMode="search"
-          enterKeyHint="search"
-          placeholder="Cerca anime (Jikan / AniList)"
-          className="w-full glass rounded-2xl py-3 pl-10 pr-10 text-sm outline-none transition placeholder:text-zinc-500 focus:border-violet-400/40 focus:bg-white/[0.08]"
-        />
-        {search && (
-          <button onClick={() => setSearch("")} aria-label="Cancella ricerca" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-zinc-500 transition hover:text-zinc-200">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
+      <SearchField value={search} onChange={setSearch} />
 
       <div className="mt-4 flex flex-col gap-2.5">
-        {searching && (
+        {state === "loading" && (
           <div aria-live="polite" aria-busy="true">
             <DiscoverySkeleton />
             <DiscoverySkeleton />
           </div>
         )}
 
-        {!searching && q.length < 3 && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
+        {state === "prompt" && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
 
-        {!searching && !hasResults && q.length >= 3 && (
+        {state === "empty" && <Empty icon={Search} title="Nessun risultato trovato" desc="Prova con un altro titolo." />}
+
+        {state === "error" && (
           <Empty
-            icon={error ? AlertTriangle : Search}
-            title="Nessun risultato trovato"
-            desc={error ? "La ricerca non è andata a buon fine. Controlla la connessione e riprova." : "Prova con un altro titolo."}
-            action={error ? <button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button> : undefined}
+            icon={AlertTriangle}
+            title="Ricerca non riuscita"
+            desc="Controlla la connessione e riprova."
+            action={<button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button>}
           />
         )}
 
-        {!searching && hasResults && list.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
+        {state === "results" && list.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
       </div>
     </div>
   );
@@ -969,7 +1009,7 @@ function SettingsSheet({ onClose, onExport, onImport, lastSync, syncState = "off
                 <div className={`flex items-center gap-1.5 text-[11px] ${s.c}`}><span className={`h-1.5 w-1.5 rounded-full ${s.d}`} />{s.t}</div>
               </div>
               <div className="text-[11px] text-zinc-400 mt-2">Ultimo aggiornamento: {lastSync ? new Date(lastSync).toLocaleString() : "Mai"}</div>
-              <div className="text-[11px] text-zinc-500 mt-1">La WatchList si allinea automaticamente tra PC e iPhone in tempo reale. Nessun codice da inserire: usa un id libreria condiviso del progetto (framory-global).</div>
+              <div className="text-[11px] text-zinc-500 mt-1">La WatchList si allinea automaticamente tra PC e iPhone in tempo reale usando un id libreria globale condiviso. Nessun codice da inserire.</div>
             </div>
             <div className="rounded-2xl glass p-3.5 shadow-lg shadow-black/20">
               <div className="text-sm font-medium mb-2">Dati</div>

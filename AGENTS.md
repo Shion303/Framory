@@ -24,9 +24,16 @@ Start with `README.md` for local setup.
 - User data is persisted in the browser via IndexedDB (`franchises`, `entries`, `meta`).
 - Cloud sync is automatic and transparent when `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`
   are set (`.env.local`); otherwise the app runs local-only. There is no Sync Code UI:
-  devices share the fixed `VITE_FRAMORY_LIBRARY_ID` row (default `framory-global`).
-- Cross-device merge is per-item last-write-wins by `updatedAt` with deletion tombstones
-  (`deleted` map), so both devices can edit without losing data.
+  every device shares the fixed global row `VITE_SYNC_ID` (default `global_user_watchlist`),
+  so PC and phone read/write the same `watchlists` row. On startup the app pulls before
+  first paint and re-pushes the merged library if the cloud was behind; every mutation
+  triggers a coalesced (~250ms) upsert. Realtime `postgres_changes` streams remote edits.
+- Cross-device merge (`mergeDocs`) is per-item last-write-wins by `updatedAt` with deletion
+  tombstones (`deleted` map) and is clock-skew safe: it never gates the whole doc on a
+  `Date.now()` comparison. `docSignature` detects real content changes so a device only
+  re-pushes when it actually holds data the cloud lacks (prevents echo loops).
+- AniList requests send `Authorization: Bearer $VITE_ANILIST_TOKEN` when set (higher rate
+  limits); anonymous access still works without it.
 - Discovery search runs Jikan v4 REST (`/v4/anime?q=...&limit=15`, preflight-free GET)
   and AniList GraphQL **in parallel**; the first non-empty response wins, so blocking one
   provider never breaks search. `searchGroupsDetailed` reports `failed` when every provider
