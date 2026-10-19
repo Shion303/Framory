@@ -27,7 +27,8 @@
   }
 }
 
-@layer utilities {
-  .safe-top { margin-top: env(safe-area-inset-top); }
-  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+@layer components {
+  .glass {
+    @apply border border-white/10 bg-white/[0.06] backdrop-blur-xl;
+  }
 }

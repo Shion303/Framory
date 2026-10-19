@@ -46,7 +46,7 @@ const jikanAnimeSchema = z.object({
 const alMediaSchema = z.object({
   id: z.number(),
   idMal: z.number().nullish().catch(null),
-  title: z.object({ romaji: z.string().nullish().catch(null), english: z.string().nullish().catch(null), native: z.string().nullish().catch(null) }).catch({}),
+  title: z.object({ romaji: z.string().nullish().catch(null), english: z.string().nullish().catch(null), native: z.string().nullish().catch(null), userPreferred: z.string().nullish().catch(null) }).catch({}),
   coverImage: z.object({ large: z.string().nullish().catch(null), medium: z.string().nullish().catch(null) }).catch({}),
   bannerImage: z.string().nullish().catch(null),
   description: z.string().nullish().catch(null),
@@ -66,23 +66,48 @@ const alMediaSchema = z.object({
   relations: z.any().catch(null),
 });
 
-const AL_FIELDS = `id idMal title{romaji english native} coverImage{large medium} bannerImage description startDate{year} endDate{year} episodes duration averageScore favourites format status season seasonYear nextAiringEpisode{episode airingAt} genres studios{nodes{name}}`;
+const AL_FIELDS = `id idMal title{romaji english native userPreferred} coverImage{large medium} bannerImage description startDate{year} endDate{year} episodes duration averageScore favourites format status season seasonYear nextAiringEpisode{episode airingAt} genres studios{nodes{name}}`;
+
+const isAbort = (e) => !!e && (e.name === "AbortError" || e.code === 20);
+const rethrowAbort = (e) => { if (isAbort(e)) throw e; };
+
+async function apiFetch(url, init = {}, { ms = 9000, signal } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  const relay = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener("abort", relay, { once: true });
+  }
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (e?.name === "AbortError") throw new Error("timeout");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", relay);
+  }
+}
 
 let lastJikanCall = 0;
-async function jikanFetch(path) {
+async function jikanFetch(path, signal) {
   const gap = Date.now() - lastJikanCall;
   if (gap < 400) await sleep(400 - gap);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   lastJikanCall = Date.now();
-  const res = await fetch(`https://api.jikan.moe/v4${path}`);
+  const res = await apiFetch(`https://api.jikan.moe/v4${path}`, {}, { ms: 6000, signal });
   if (!res.ok) throw new Error(`jikan ${res.status}`);
   return res.json();
 }
-async function alQuery(query, variables) {
-  const res = await fetch("https://graphql.anilist.co", {
+async function alQuery(query, variables, signal) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const res = await apiFetch("https://graphql.anilist.co", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ query, variables }),
-  });
+  }, { ms: 9000, signal });
   if (!res.ok) throw new Error(`anilist ${res.status}`);
   return res.json();
 }
@@ -99,18 +124,23 @@ function jikanToMedia(a) {
   const p = jikanAnimeSchema.safeParse(a);
   if (!p.success) return null;
   const m = p.data;
-  const malId = m.mal_id;
+  const malId = m?.mal_id;
+  if (!malId) return null;
   const images = m.images?.webp?.large_image_url || m.images?.jpg?.large_image_url || "";
   const titles = [m.title, m.title_english, m.title_japanese, ...(m.title_synonyms || [])].filter(Boolean);
   const year = m.year || m.aired?.prop?.from?.year || null;
+  const title = (m.title_english || m.title || titles[0] || "").trim();
+  if (!title) return null;
+  const airedFrom = m.aired?.from ? Date.parse(m.aired.from) : null;
+  const airedTo = m.aired?.to ? Date.parse(m.aired.to) : null;
   return {
     id: `m${malId}`, malId, alId: null, source: "mal", titles,
-    title: m.title_english || m.title || titles[0], cover: images, banner: "",
-    synopsis: stripHtml(m.synopsis) || "", year, score: m.score, members: m.members,
-    format: m.type || "", status: m.status || "", episodes: m.episodes,
-    durationMin: parseDuration(m.duration), airedFrom: m.aired?.from ? Date.parse(m.aired.from) : null,
-    airedTo: m.aired?.to ? Date.parse(m.aired.to) : null,
-    airing: !!m.airing, genres: (m.genres || []).map((g) => g.name),
+    title, cover: images || "", banner: "",
+    synopsis: stripHtml(m.synopsis) || "", year, score: m.score ?? null, members: m.members ?? 0,
+    format: m.type || "", status: m.status || "", episodes: Number.isFinite(m.episodes) ? m.episodes : null,
+    durationMin: parseDuration(m.duration), airedFrom: Number.isFinite(airedFrom) ? airedFrom : null,
+    airedTo: Number.isFinite(airedTo) ? airedTo : null,
+    airing: !!m.airing, genres: (m.genres || []).map((g) => g?.name).filter(Boolean),
     nextAiring: null,
   };
 }
@@ -118,31 +148,49 @@ function alToMedia(a) {
   const p = alMediaSchema.safeParse(a);
   if (!p.success) return null;
   const m = p.data;
-  const malId = m.idMal;
+  const alId = m?.id;
+  if (!alId) return null;
+  const malId = m.idMal ?? null;
   const cover = m.coverImage?.large || m.coverImage?.medium || "";
-  const titles = [m.title?.english, m.title?.romaji, m.title?.native].filter(Boolean);
+  const titles = [m.title?.english, m.title?.userPreferred, m.title?.romaji, m.title?.native].filter(Boolean);
   const year = m.seasonYear || m.startDate?.year || m.endDate?.year || null;
+  const title = (m.title?.english || m.title?.userPreferred || m.title?.romaji || titles[0] || "").trim();
+  if (!title) return null;
   return {
-    id: malId ? `m${malId}` : `a${m.id}`, malId, alId: m.id, source: "al", titles,
-    title: m.title?.english || m.title?.romaji || titles[0] || "", cover, banner: m.bannerImage || "",
-    synopsis: stripHtml(m.description) || "", year, score: m.averageScore ? m.averageScore / 10 : null, members: m.favourites,
-    format: m.format || "", status: m.status || "", episodes: m.episodes,
+    id: malId ? `m${malId}` : `a${alId}`, malId, alId, source: "al", titles,
+    title, cover: cover || "", banner: m.bannerImage || "",
+    synopsis: stripHtml(m.description) || "", year, score: m.averageScore ? m.averageScore / 10 : null, members: m.favourites ?? 0,
+    format: m.format || "", status: m.status || "", episodes: Number.isFinite(m.episodes) ? m.episodes : null,
     durationMin: m.duration || null, airedFrom: null, airedTo: null,
-    airing: m.status === "RELEASING", genres: m.genres || [],
-    nextAiring: m.nextAiringEpisode ? { ep: m.nextAiringEpisode.episode, at: m.nextAiringEpisode.airingAt * 1000 } : null,
+    airing: m.status === "RELEASING", genres: Array.isArray(m.genres) ? m.genres.filter(Boolean) : [],
+    nextAiring: m.nextAiringEpisode?.airingAt ? { ep: m.nextAiringEpisode.episode ?? null, at: m.nextAiringEpisode.airingAt * 1000 } : null,
   };
 }
+const isMedia = (m) => !!m && typeof m.id === "string" && !!m.id.trim() && typeof m.title === "string" && !!m.title.trim();
+const cleanMedia = (arr) => (Array.isArray(arr) ? arr.filter(isMedia) : []);
 
-async function providerSearch(q) {
+async function jikanSearch(q, signal) {
+  const json = await jikanFetch(`/anime?q=${encodeURIComponent(q)}&limit=25&sfw=true&order_by=members&sort=desc`, signal);
+  const raw = json?.data;
+  return cleanMedia((Array.isArray(raw) ? raw : []).map(jikanToMedia));
+}
+async function alSearch(q, signal) {
+  const json = await alQuery(AL_SEARCH, { q }, signal);
+  const raw = json?.data?.Page?.media;
+  return cleanMedia((Array.isArray(raw) ? raw : []).map(alToMedia));
+}
+
+async function providerSearch(q, signal) {
+  if (!q || !q.trim()) return [];
+  let primary = [];
   try {
-    const json = await jikanFetch(`/anime?q=${encodeURIComponent(q)}&limit=25&sfw=true&order_by=members&sort=desc`);
-    const list = (json?.data || []).map(jikanToMedia).filter(Boolean);
-    if (list.length) return list;
-  } catch (e) { console.warn("[api] jikan search fail", e); }
+    primary = await alSearch(q, signal);
+  } catch (e) { rethrowAbort(e); console.warn("[api] anilist search fail", e); }
+  if (primary.length) return primary;
   try {
-    const json = await alQuery(AL_SEARCH, { q });
-    return (json?.data?.Page?.media || []).map(alToMedia).filter(Boolean);
-  } catch (e) { console.warn("[api] anilist search fail", e); return []; }
+    return await jikanSearch(q, signal);
+  } catch (e) { rethrowAbort(e); console.warn("[api] jikan search fail", e); }
+  return [];
 }
 async function providerGetMedia(ids) {
   const uniq = [...new Set((ids || []).filter(Boolean))];
@@ -151,8 +199,8 @@ async function providerGetMedia(ids) {
   const out = new Map();
   const push = (m) => { if (m) out.set(m.id, m); };
   try {
-    for (const c of chunk(mal, 50)) { const json = await alQuery(AL_BY_MAL, { ids: c }); (json?.data?.Page?.media || []).forEach((x) => push(alToMedia(x))); }
-    for (const c of chunk(al, 50)) { const json = await alQuery(AL_BY_IDS, { ids: c }); (json?.data?.Page?.media || []).forEach((x) => push(alToMedia(x))); }
+    for (const c of chunk(mal, 50)) { const json = await alQuery(AL_BY_MAL, { ids: c }); const raw = json?.data?.Page?.media; for (const x of Array.isArray(raw) ? raw : []) push(alToMedia(x)); }
+    for (const c of chunk(al, 50)) { const json = await alQuery(AL_BY_IDS, { ids: c }); const raw = json?.data?.Page?.media; for (const x of Array.isArray(raw) ? raw : []) push(alToMedia(x)); }
   } catch (e) { console.warn("[api] al batch fail", e); }
   for (const n of mal) if (!out.has(`m${n}`)) { try { const json = await jikanFetch(`/anime/${n}`); push(jikanToMedia(json?.data)); } catch (e) { console.warn("[api] jikan fallback fail", n, e); } }
   return [...out.values()];
@@ -323,34 +371,37 @@ function titleKey(t) {
 }
 function allKeys(m) {
   const set = new Set();
-  const titles = (m.titles && m.titles.length ? m.titles : [m.title]).filter(Boolean);
-  for (const t of titles) { const k = titleKey(t); if (k.length > 1) set.add(k); }
+  const titles = (Array.isArray(m?.titles) && m.titles.length ? m.titles : [m?.title]).filter(Boolean);
+  for (const t of titles) { const k = titleKey(t); if (k && k.length > 1) set.add(k); }
   return [...set];
 }
-const groupScore = (m) => (m.members || m.score || 0) + (m.malId ? 0 : -1e6);
-const cmpChron = (a, b) => { const A = a.airedFrom || a.year || 9999, B = b.airedFrom || b.year || 9999; if (A !== B) return A - B; return a.year || b.year || 9999; };
+const groupScore = (m) => (m?.members || m?.score || 0) + (m?.malId ? 0 : -1e6);
+const cmpChron = (a, b) => { const A = a?.airedFrom || a?.year || 9999, B = b?.airedFrom || b?.year || 9999; if (A !== B) return A - B; return a?.year || b?.year || 9999; };
 
 const ALLOWED_REL = new Set(["SEQUEL", "PREQUEL", "SIDE_STORY", "SUMMARY", "ALTERNATIVE", "ALTERNATIVE_VERSION", "PARENT", "FULL_STORY", "SPIN_OFF"]);
 const NON_ANIME_FORMAT = new Set(["MANGA", "NOVEL", "ONE_SHOT", "MANHUA", "MANHWA", "WEB_NOVEL", "LIGHT_NOVEL", "NOVEL_SPECIAL"]);
 const isAnimeNode = (n) => !n || !n.format || !NON_ANIME_FORMAT.has(String(n.format).toUpperCase());
 
-const REL_FIELDS = `id idMal title{romaji english native} coverImage{large medium} bannerImage description startDate{year} endDate{year} episodes duration averageScore favourites format status seasonYear genres`;
+const REL_FIELDS = `id idMal title{romaji english native userPreferred} coverImage{large medium} bannerImage description startDate{year} endDate{year} episodes duration averageScore favourites format status seasonYear genres`;
 const AL_REL_MAL = `query($ids:[Int]){Page(page:1,perPage:50){media(idMal_in:$ids,type:ANIME){${REL_FIELDS} relations{edges{relationType node{${REL_FIELDS}}}}}}}`;
 const AL_REL_ID = `query($ids:[Int]){Page(page:1,perPage:50){media(id_in:$ids,type:ANIME){${REL_FIELDS} relations{edges{relationType node{${REL_FIELDS}}}}}}}`;
 
-async function alRelBatch(malIds, alIds) {
+async function alRelBatch(malIds, alIds, signal) {
   const out = new Map();
+  const collect = (json) => {
+    const raw = json?.data?.Page?.media;
+    for (const m of Array.isArray(raw) ? raw : []) {
+      const mm = alToMedia(m);
+      if (mm) out.set(mm.id, { media: mm, edges: Array.isArray(m?.relations?.edges) ? m.relations.edges : [] });
+    }
+  };
   for (const c of chunk([...new Set(malIds)], 50)) {
-    try {
-      const json = await alQuery(AL_REL_MAL, { ids: c });
-      for (const m of json?.data?.Page?.media || []) { const mm = alToMedia(m); if (mm) out.set(mm.id, { media: mm, edges: m.relations?.edges || [] }); }
-    } catch (e) { console.warn("[rel] mal batch", e); }
+    try { collect(await alQuery(AL_REL_MAL, { ids: c }, signal)); }
+    catch (e) { rethrowAbort(e); console.warn("[rel] mal batch", e); }
   }
   for (const c of chunk([...new Set(alIds)], 50)) {
-    try {
-      const json = await alQuery(AL_REL_ID, { ids: c });
-      for (const m of json?.data?.Page?.media || []) { const mm = alToMedia(m); if (mm) out.set(mm.id, { media: mm, edges: m.relations?.edges || [] }); }
-    } catch (e) { console.warn("[rel] id batch", e); }
+    try { collect(await alQuery(AL_REL_ID, { ids: c }, signal)); }
+    catch (e) { rethrowAbort(e); console.warn("[rel] id batch", e); }
   }
   return out;
 }
@@ -358,6 +409,7 @@ async function alRelBatch(malIds, alIds) {
 async function discoverRelations(startMedia, opts = {}) {
   const maxDiscovered = opts.maxDiscovered ?? 40;
   const maxRounds = opts.maxRounds ?? 3;
+  const deadline = Date.now() + (opts.budgetMs ?? 6000);
   const edges = new Map();
   const discovered = new Map();
   const sources = new Map();
@@ -365,17 +417,19 @@ async function discoverRelations(startMedia, opts = {}) {
   for (const m of startMedia) { if (!m?.id) continue; visited.add(m.id); sources.set(m.id, m); }
   let frontier = startMedia.filter((m) => m?.id);
   for (let round = 0; round < maxRounds && frontier.length; round++) {
+    if (Date.now() > deadline) break;
     const malIds = [...new Set(frontier.map((m) => m.malId).filter(Boolean))];
     const alIds = [...new Set(frontier.filter((m) => !m.malId && m.alId).map((m) => m.alId))];
     if (!malIds.length && !alIds.length) break;
-    const batch = await alRelBatch(malIds, alIds);
+    const batch = await alRelBatch(malIds, alIds, opts.signal);
     const next = [];
     let stop = false;
     for (const [sid, payload] of batch) {
+      if (!payload) continue;
       if (payload.media) sources.set(sid, payload.media);
       const set = edges.get(sid) || new Set();
-      for (const edge of payload.edges) {
-        if (!ALLOWED_REL.has(edge.relationType)) continue;
+      for (const edge of Array.isArray(payload.edges) ? payload.edges : []) {
+        if (!edge || !ALLOWED_REL.has(edge.relationType)) continue;
         const node = edge.node;
         if (!isAnimeNode(node)) continue;
         const tm = alToMedia(node);
@@ -404,41 +458,77 @@ function unionFind(n) {
 function groupResults(results, edges) {
   const all = [];
   const idx = new Map();
-  const add = (m) => { if (!m || !m.id || idx.has(m.id)) return; idx.set(m.id, all.length); all.push(m); };
-  for (const m of results) add(m);
-  if (edges) for (const m of edges.discovered) add(m);
+  const add = (m) => { if (!isMedia(m) || idx.has(m.id)) return; idx.set(m.id, all.length); all.push(m); };
+  for (const m of results || []) add(m);
+  if (edges) for (const m of edges.discovered || []) add(m);
   if (!all.length) return [];
 
   const { find, union } = unionFind(all.length);
   const keyIdx = new Map();
-  all.forEach((m, i) => { for (const k of allKeys(m)) { if (keyIdx.has(k)) union(i, keyIdx.get(k)); else keyIdx.set(k, i); } });
-  if (edges) for (const [sid, tgts] of edges.edges) { const si = idx.get(sid); if (si == null) continue; for (const t of tgts) { const ti = idx.get(t); if (ti != null) union(si, ti); } }
+  all.forEach((m, i) => { for (const k of allKeys(m)) { if (!k || keyIdx.has(k)) { if (k && keyIdx.has(k)) union(i, keyIdx.get(k)); continue; } keyIdx.set(k, i); } });
+  if (edges && edges.edges instanceof Map) {
+    for (const [sid, tgts] of edges.edges) {
+      const si = idx.get(sid);
+      if (si == null || !tgts) continue;
+      for (const t of tgts) { const ti = idx.get(t); if (ti != null) union(si, ti); }
+    }
+  }
 
   const buckets = new Map();
   all.forEach((m, i) => { const r = find(i); if (!buckets.has(r)) buckets.set(r, []); buckets.get(r).push(m); });
 
   const out = [];
   for (const arr of buckets.values()) {
-    const sortedMembers = arr.slice().sort(cmpChron);
-    const rep = arr.slice().sort((a, b) => groupScore(b) - groupScore(a))[0];
+    if (!arr.length) continue;
+    const sortedMembers = arr.slice().filter(isMedia).sort(cmpChron);
+    const rep = arr.slice().filter(isMedia).sort((a, b) => groupScore(b) - groupScore(a))[0];
+    if (!rep) continue;
     out.push({
       key: `${titleKey(rep.title)}:${rep.id}`,
       rep,
-      memberIds: [...new Set(arr.map((m) => m.id))],
-      preview: [...new Set(arr.map((m) => (m.format || "TV").toUpperCase()))].slice(0, 4),
+      memberIds: [...new Set(sortedMembers.map((m) => m.id))].filter(Boolean),
+      preview: [...new Set(sortedMembers.map((m) => (m.format || "TV").toUpperCase()))].slice(0, 4),
       members: sortedMembers,
-      title: rep.title, cover: rep.cover, synopsis: rep.synopsis, year: rep.year,
+      title: rep.title, cover: rep.cover || "", synopsis: rep.synopsis || "", year: rep.year ?? null,
     });
   }
-  return out.sort((a, b) => (b.memberIds.length - a.memberIds.length) || (groupScore(b.rep) - groupScore(a.rep)));
+  return out
+    .filter((g) => g.memberIds.length > 0)
+    .sort((a, b) => (b.memberIds.length - a.memberIds.length) || (groupScore(b.rep) - groupScore(a.rep)));
 }
 
-async function searchGroups(q) {
-  const res = await providerSearch(q);
+async function searchGroups(q, signal) {
+  const res = await providerSearch(q, signal);
   if (!res.length) return [];
   let edges = { edges: new Map(), discovered: [] };
-  try { edges = await discoverRelations(res); } catch (e) { console.warn("[group] relations failed", e); }
-  return groupResults(res, edges);
+  try {
+    edges = await discoverRelations(res, { maxRounds: 3, budgetMs: 6000, signal });
+  } catch (e) {
+    rethrowAbort(e);
+    console.warn("[group] relations failed, using base results", e);
+  }
+  try {
+    return groupResults(res, edges);
+  } catch (e) {
+    console.warn("[group] grouping failed, using base results", e);
+    return GroupFallback(res);
+  }
+}
+
+function GroupFallback(media) {
+  const out = [];
+  for (const m of media || []) {
+    if (!isMedia(m)) continue;
+    out.push({
+      key: `${titleKey(m.title)}:${m.id}`,
+      rep: m,
+      memberIds: [m.id],
+      preview: [(m.format || "TV").toUpperCase()],
+      members: [m],
+      title: m.title, cover: m.cover || "", synopsis: m.synopsis || "", year: m.year ?? null,
+    });
+  }
+  return out;
 }
 
 const frId = (meds, exp) => exp || `f:${Math.min(...meds.map((m) => m.malId || m.alId || 0))}`;
@@ -734,7 +824,7 @@ async function syncLibrary(franchises) {
 }
 
 export {
-  searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
+  searchGroups, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
   providerGetMedia, buildFranchise, previewParts, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
   orderedParts, partItemsMap, reorderParts, reorderPartItems,
   titleKey, syncLibrary,

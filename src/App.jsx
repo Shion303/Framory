@@ -1,13 +1,61 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems } from "./framory";
 
-const DEBOUNCE_MS = 400;
-const CACHE_TTL = 5 * 60 * 1000;
-const CACHE_MAX = 60;
+const DEBOUNCE_MS = 350;
+const CACHE_TTL = 10 * 60 * 1000;
+const CACHE_MAX = 80;
 const SYNC_INTERVAL = 30 * 60 * 1000;
 const SYNC_CHECK = 5 * 60 * 1000;
 const PART_STATE = { finished: "Uscito", airing: "In uscita", upcoming: "Prossimamente", unknown: "Data TBA" };
+const NO_TITLE = "Titolo non disponibile";
+
+const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>?/gm, "").replace(/&(?:[a-z]+|#\d+);/gi, " ").replace(/\s+/g, " ").trim();
+
+function normalizeMedia(item) {
+  if (!item || typeof item !== "object") return null;
+  const title = (item?.title?.english || item?.title?.userPreferred || item?.title?.romaji || item?.title || "").trim();
+  if (!title) return null;
+  return {
+    id: item?.id || null,
+    malId: item?.malId ?? null,
+    alId: item?.alId ?? null,
+    title,
+    titles: Array.isArray(item?.titles) ? item.titles.filter(Boolean) : [title],
+    cover: item?.cover || item?.coverImage?.large || item?.images?.jpg?.image_url || "",
+    banner: item?.banner || "",
+    synopsis: stripTags(item?.synopsis || item?.description),
+    episodes: Number.isFinite(item?.episodes) ? item.episodes : 0,
+    format: item?.format || "TV",
+    status: item?.status || "",
+    year: item?.year ?? null,
+    score: item?.score ?? null,
+    members: item?.members ?? 0,
+    durationMin: item?.durationMin ?? null,
+    airedFrom: item?.airedFrom ?? null,
+    airing: !!item?.airing,
+    relations: Array.isArray(item?.relations) ? item.relations : [],
+  };
+}
+
+function normalizeGroup(gr) {
+  if (!gr || typeof gr !== "object" || !gr.key) return null;
+  const members = (Array.isArray(gr.members) ? gr.members : []).map(normalizeMedia).filter(Boolean);
+  const rep = normalizeMedia(gr.rep) || members[0] || null;
+  const memberIds = (Array.isArray(gr.memberIds) ? gr.memberIds : members.map((m) => m.id)).filter(Boolean);
+  if (!memberIds.length) return null;
+  return {
+    key: gr.key,
+    rep: rep || { title: NO_TITLE, cover: "" },
+    memberIds,
+    members: members.length ? members : [],
+    preview: (Array.isArray(gr.preview) ? gr.preview : []).filter(Boolean).slice(0, 6),
+    title: rep?.title || members[0]?.title || gr.title || NO_TITLE,
+    cover: rep?.cover || members[0]?.cover || "",
+    synopsis: rep?.synopsis || members[0]?.synopsis || "",
+    year: rep?.year ?? members[0]?.year ?? null,
+  };
+}
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -21,6 +69,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [groups, setGroups] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [adding, setAdding] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -29,6 +78,7 @@ export default function App() {
   const syncRef = useRef(false);
   const searchSeq = useRef(0);
   const cacheRef = useRef(new Map());
+  const abortRef = useRef(null);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -88,27 +138,48 @@ export default function App() {
 
   const doSearch = useCallback(async (raw) => {
     const q = (raw || "").trim();
-    if (q.length < 2) { setGroups([]); setSearching(false); return; }
-    const hit = cacheRef.current.get(q.toLowerCase());
-    if (hit && Date.now() - hit.t < CACHE_TTL) { setGroups(hit.g); setSearching(false); return; }
+    const key = q.toLowerCase();
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (q.length < 3) { setGroups([]); setSearching(false); return; }
+    const hit = cacheRef.current.get(key);
+    if (hit && Date.now() - hit.t < CACHE_TTL) {
+      cacheRef.current.delete(key);
+      cacheRef.current.set(key, hit);
+      setGroups(hit.g);
+      setSearching(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     const seq = ++searchSeq.current;
     setSearching(true);
     try {
-      const g = await searchGroups(q);
-      cacheRef.current.set(q.toLowerCase(), { g, t: Date.now() });
+      const g = await searchGroups(q, ctrl.signal);
+      if (ctrl.signal.aborted || seq !== searchSeq.current) return;
+      const safe = (Array.isArray(g) ? g : []).map(normalizeGroup).filter(Boolean);
+      cacheRef.current.set(key, { g: safe, t: Date.now() });
       if (cacheRef.current.size > CACHE_MAX) cacheRef.current.delete(cacheRef.current.keys().next().value);
-      if (seq === searchSeq.current) setGroups(g);
+      setGroups(safe);
+      setSearchError(false);
+      setSearching(false);
     } catch (e) {
+      if (e?.name === "AbortError" || ctrl.signal.aborted || seq !== searchSeq.current) return;
       console.warn("[search]", e);
-      if (seq === searchSeq.current) { setGroups([]); showToast("Errore ricerca"); }
+      setGroups([]);
+      setSearchError(true);
+      setSearching(false);
     }
-    if (seq === searchSeq.current) setSearching(false);
   }, []);
+
+  const retrySearch = useCallback(() => { cacheRef.current.delete(search.trim().toLowerCase()); doSearch(search); }, [search, doSearch]);
 
   useEffect(() => {
     const t = setTimeout(() => doSearch(search), DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [search, doSearch]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const putEntry = async (fid, en) => {
     const next = { ...en, updatedAt: Date.now() };
@@ -182,35 +253,43 @@ export default function App() {
   );
   const previewFid = useMemo(() => findExisting(preview), [preview, franchises, findExisting]);
 
-  if (!ready) return <div className="min-h-screen bg-[#0b0b0f] text-zinc-100 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-violet-300" /></div>;
+  if (!ready) return <div className="min-h-screen bg-[#07070b] text-zinc-100 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-violet-300" /></div>;
 
   return (
-    <div className="min-h-screen bg-[#0b0b0f] text-zinc-100 pb-20">
-      <div className="px-3 pt-3 flex items-center justify-between safe-top">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-violet-300" />
-          <div className="text-base font-semibold">Framory</div>
-          {syncing && <Loader2 className="w-3.5 h-3.5 animate-spin text-zinc-500" />}
-        </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => runSync(false)} disabled={syncing} aria-label="Sincronizza" className="p-2 rounded-full bg-white/5 disabled:opacity-60">{syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}</button>
-          <button onClick={() => setSettingsOpen(true)} aria-label="Impostazioni" className="p-2 rounded-full bg-white/5"><Settings className="w-4 h-4" /></button>
-        </div>
-      </div>
+    <div className="relative min-h-screen bg-[#07070b] text-zinc-100 overflow-x-hidden">
+      <Ambient />
 
-      <div className="mt-2">
-        {tab === "home" && <HomeTab list={list} onOpen={setDetailId} onGoDiscovery={() => setTab("discovery")} />}
-        {tab === "discovery" && <DiscoveryTab search={search} setSearch={setSearch} groups={groups} searching={searching} onOpen={setPreview} />}
-        {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} />}
-      </div>
+      <header className="sticky top-0 z-30 px-3 pb-3" style={{ paddingTop: "calc(env(safe-area-inset-top) + 10px)" }}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-full bg-gradient-to-b from-[#07070b] via-[#07070b]/85 to-transparent" />
+        <div className="mx-auto flex max-w-5xl items-center justify-between">
+          <div className="glass flex items-center gap-2 rounded-2xl px-3 py-2">
+            <Sparkles className="w-4 h-4 text-violet-300" />
+            <div className="text-sm font-semibold tracking-tight">Framory</div>
+            {syncing && <Loader2 className="w-3.5 h-3.5 animate-spin text-zinc-400" />}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => runSync(false)} disabled={syncing} aria-label="Sincronizza" className="glass p-2.5 rounded-2xl disabled:opacity-60 active:scale-95 transition-transform">{syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}</button>
+            <button onClick={() => setSettingsOpen(true)} aria-label="Impostazioni" className="glass p-2.5 rounded-2xl active:scale-95 transition-transform"><Settings className="w-4 h-4" /></button>
+          </div>
+        </div>
+      </header>
 
-      <div className="fixed bottom-0 left-0 right-0 z-40 bg-[#0b0b0f]/90 backdrop-blur border-t border-white/5">
-        <div className="grid grid-cols-3 h-14 pb-safe">
+      <main className="pb-36">
+        <ErrorBoundary key={`${tab}-${groups.length}`} onReset={() => setGroups([])}>
+          {tab === "home" && <HomeTab list={list} onOpen={setDetailId} onGoDiscovery={() => setTab("discovery")} />}
+          {tab === "discovery" && <DiscoveryTab search={search} setSearch={setSearch} groups={groups} searching={searching} error={searchError} onRetry={retrySearch} onOpen={setPreview} />}
+          {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} />}
+        </ErrorBoundary>
+      </main>
+
+      <nav className="fixed inset-x-0 z-40 flex justify-center px-4" style={{ bottom: "calc(env(safe-area-inset-bottom) + 12px)" }}>
+        <div className="relative flex w-full max-w-sm items-center gap-1 rounded-[26px] border border-white/15 bg-black/40 p-1.5 shadow-2xl shadow-black/60 backdrop-blur-2xl">
+          <div className="pointer-events-none absolute inset-0 rounded-[26px] bg-gradient-to-b from-white/10 via-white/[0.02] to-transparent" />
           <TabBtn active={tab === "home"} onClick={() => setTab("home")} icon={Home} label="Home" />
           <TabBtn active={tab === "discovery"} onClick={() => setTab("discovery")} icon={Search} label="Discovery" />
           <TabBtn active={tab === "watchlist"} onClick={() => setTab("watchlist")} icon={Bookmark} label="Watchlist" />
         </div>
-      </div>
+      </nav>
 
       {detailId && franchises[detailId] && entries[detailId] && (
         <Detail
@@ -230,13 +309,56 @@ export default function App() {
       )}
       {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={importData} lastSync={lastSync} />}
 
-      <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#141317]/95 border border-white/10 text-xs transition-all ${toast ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"}`}>{toast}</div>
+      <div className={`fixed left-1/2 z-50 -translate-x-1/2 px-4 py-2 rounded-full border border-white/15 bg-black/60 backdrop-blur-2xl text-xs shadow-xl transition-all duration-300 ${toast ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"}`} style={{ bottom: "calc(env(safe-area-inset-bottom) + 92px)" }}>{toast}</div>
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.warn("[render]", error, info?.componentStack);
+    if (typeof window !== "undefined" && window.__framoryErrors) window.__framoryErrors.push({ error, info });
+  }
+  reset = () => { this.setState({ error: null }); this.props.onReset?.(); };
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center px-6 py-16 text-center">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-red-400/30 bg-red-500/10">
+          <AlertTriangle className="w-6 h-6 text-red-300" />
+        </div>
+        <p className="font-medium mb-1">Impossibile caricare i risultati della ricerca.</p>
+        <p className="text-sm text-zinc-500 mb-4 max-w-sm">Riprova. Se il problema continua, cambia tab e torna qui.</p>
+        <button onClick={this.reset} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm active:scale-95 transition">Riprova</button>
+      </div>
+    );
+  }
+}
+
+function Ambient() {
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+      <div className="absolute -top-28 -left-24 h-80 w-80 rounded-full bg-violet-600/25 blur-[100px]" />
+      <div className="absolute top-1/3 -right-32 h-96 w-96 rounded-full bg-sky-500/15 blur-[110px]" />
+      <div className="absolute -bottom-24 left-1/4 h-80 w-80 rounded-full bg-fuchsia-500/10 blur-[100px]" />
     </div>
   );
 }
 
 function TabBtn({ active, onClick, icon: Icon, label }) {
-  return <button onClick={onClick} className={`flex flex-col items-center justify-center gap-0.5 text-[10px] transition-colors ${active ? "text-violet-300" : "text-zinc-500"}`}><Icon className="w-4 h-4" /><span>{label}</span></button>;
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={`relative flex flex-1 flex-col items-center justify-center gap-1 rounded-[22px] py-2 transition-all duration-300 active:scale-95 ${active ? "text-white" : "text-zinc-500"}`}
+    >
+      <span className={`absolute inset-0 rounded-[22px] transition-all duration-300 ${active ? "bg-white/10 border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]" : "opacity-0"}`} />
+      <Icon className={`relative w-[18px] h-[18px] transition-transform duration-300 ${active ? "scale-110" : "scale-100"}`} strokeWidth={active ? 2.4 : 2} />
+      <span className={`relative text-[10px] leading-none transition-opacity duration-300 ${active ? "opacity-100 font-medium" : "opacity-70"}`}>{label}</span>
+    </button>
+  );
 }
 
 function Poster({ src, alt, className = "", rounded = "rounded-2xl" }) {
@@ -261,20 +383,19 @@ function Poster({ src, alt, className = "", rounded = "rounded-2xl" }) {
 }
 
 function Empty({ icon: Icon, title, desc, action }) {
-  return <div className="flex flex-col items-center justify-center py-20 text-center px-6"><div className="w-14 h-14 rounded-full bg-white/5 flex items-center justify-center mb-4"><Icon className="w-6 h-6 text-zinc-500" /></div><p className="font-medium mb-1">{title}</p>{desc && <p className="text-sm text-zinc-500 mb-4 max-w-sm">{desc}</p>}{action}</div>;
+  return <div className="flex flex-col items-center justify-center px-6 py-20 text-center"><div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl glass"><Icon className="w-6 h-6 text-zinc-400" /></div><p className="font-medium mb-1">{title}</p>{desc && <p className="text-sm text-zinc-500 mb-4 max-w-sm">{desc}</p>}{action}</div>;
 }
-function Loading({ label }) { return <div className="flex flex-col items-center justify-center py-20 text-zinc-500"><Loader2 className="w-6 h-6 animate-spin mb-3" /><p className="text-sm">{label}</p></div>; }
 
 function HomeTab({ list, onOpen, onGoDiscovery }) {
   const watching = list.filter((x) => { const s = computeStatus(x.fr, x.en); return s.key === "watching" || s.key === "ongoing" || s.key === "completed"; });
   return (
-    <div className="px-3 pt-3 flex flex-col gap-5">
+    <div className="mx-auto flex max-w-2xl flex-col gap-5 px-3 pt-4">
       <section>
-        <div className="text-sm font-medium mb-2 flex items-center gap-1"><Play className="w-4 h-4" />Continua a guardare</div>
+        <div className="mb-2.5 flex items-center gap-1.5 text-sm font-medium text-zinc-200"><Play className="w-4 h-4" />Continua a guardare</div>
         {watching.length === 0 ? (
-          <Empty icon={Play} title="Nessun anime in visione" desc="Vai su Discovery per cercare un titolo." action={<button onClick={onGoDiscovery} className="px-4 py-2 rounded-2xl bg-violet-500/20 border border-violet-400/40 text-violet-200 text-sm">Vai su Discovery</button>} />
+          <Empty icon={Play} title="Nessun anime in visione" desc="Vai su Discovery per cercare un titolo." action={<button onClick={onGoDiscovery} className="rounded-2xl border border-violet-400/40 bg-violet-500/20 px-4 py-2 text-sm text-violet-200 active:scale-95 transition">Vai su Discovery</button>} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">{watching.map((x) => <Card key={x.fid} x={x} onOpen={onOpen} />)}</div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">{watching.map((x) => <Card key={x.fid} x={x} onOpen={onOpen} />)}</div>
         )}
       </section>
     </div>
@@ -286,37 +407,78 @@ function Card({ x, onOpen }) {
   const items = activeItems(x.fr, x.en);
   const next = items.find((i) => !(x.en.checked || []).includes(i.id));
   return (
-    <button onClick={() => onOpen(x.fid)} className="w-full flex gap-3 p-2 rounded-2xl bg-[#141317]/70 border border-white/5 text-left hover:border-white/10 active:scale-[0.995] transition">
-      <Poster src={x.fr.cover} alt={x.fr.title} className="w-20 shrink-0 aspect-[2/3]" />
-      <div className="flex-1 min-w-0 flex flex-col">
-        <div className="text-sm font-medium line-clamp-1">{x.fr.title}</div>
-        <div className="text-[11px] text-zinc-400 mt-0.5">{s.done}/{s.total} - {s.pct}%</div>
-        <div className={`mt-1 text-[10px] px-1.5 py-0.5 rounded-full border w-fit ${STATUS_STYLES[s.key]}`}>{s.label}</div>
-        {next && <div className="mt-auto text-[11px] text-zinc-500 line-clamp-1 pt-1">Prossimo: {next.title}</div>}
+    <button onClick={() => onOpen(x.fid)} className="group flex w-full gap-3 rounded-2xl glass p-2.5 text-left shadow-lg shadow-black/20 transition-all duration-300 hover:bg-white/[0.09] active:scale-[0.99]">
+      <Poster src={x.fr.cover} alt={x.fr.title} className="aspect-[2/3] w-[72px] shrink-0 shadow-md shadow-black/30" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="line-clamp-1 text-sm font-medium">{x.fr.title}</div>
+        <div className="mt-0.5 text-[11px] text-zinc-400">{s.done}/{s.total} · {s.pct}%</div>
+        <div className={`mt-1 w-fit rounded-full border px-1.5 py-0.5 text-[10px] ${STATUS_STYLES[s.key]}`}>{s.label}</div>
+        {next && <div className="mt-auto line-clamp-1 pt-1 text-[11px] text-zinc-500">Prossimo: {next.title}</div>}
       </div>
-      <div className="self-center"><Check className="w-4 h-4 text-zinc-500" /></div>
+      <ChevronRight className="w-4 h-4 shrink-0 self-center text-zinc-600 transition-transform group-hover:translate-x-0.5" />
     </button>
   );
 }
 
-function DiscoveryTab({ search, setSearch, groups, searching, onOpen }) {
-  const empty = groups.length === 0;
+function SkeletonRow() {
   return (
-    <div className="px-3 pt-3">
+    <div className="flex gap-3 rounded-2xl glass p-2.5" aria-hidden>
+      <div className="aspect-[2/3] w-[72px] shrink-0 animate-pulse rounded-2xl bg-white/[0.07]" />
+      <div className="min-w-0 flex-1 space-y-2 py-1">
+        <div className="h-3 w-2/3 animate-pulse rounded-full bg-white/[0.09]" />
+        <div className="h-2.5 w-1/3 animate-pulse rounded-full bg-white/[0.07]" />
+        <div className="h-2.5 w-full animate-pulse rounded-full bg-white/[0.05]" />
+        <div className="h-2.5 w-4/5 animate-pulse rounded-full bg-white/[0.04]" />
+      </div>
+    </div>
+  );
+}
+
+function DiscoveryTab({ search, setSearch, groups, searching, error, onRetry, onOpen }) {
+  const q = search.trim();
+  const hasResults = groups.length > 0;
+  return (
+    <div className="mx-auto max-w-2xl px-3 pt-4">
       <div className="relative">
-        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+        <Search className="absolute left-3.5 top-1/2 w-4 h-4 -translate-y-1/2 text-zinc-500" />
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          inputMode="search"
+          enterKeyHint="search"
           placeholder="Cerca anime (MAL / AniList)"
-          className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-[#141317]/70 border border-white/5 text-sm outline-none focus:border-violet-400/40"
+          className="w-full glass rounded-2xl py-3 pl-10 pr-10 text-sm outline-none transition placeholder:text-zinc-500 focus:border-violet-400/40 focus:bg-white/[0.08]"
         />
+        {search && (
+          <button onClick={() => setSearch("")} aria-label="Cancella ricerca" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-zinc-500 transition hover:text-zinc-200">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
-      {searching && <Loading label="Ricerca in corso..." />}
-      {!searching && empty && search.trim().length >= 2 && <Empty icon={Search} title="Nessun risultato" desc="Prova con un altro titolo." />}
-      {!searching && empty && search.trim().length < 2 && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 2 caratteri per iniziare la ricerca." />}
-      <div className="mt-3 flex flex-col gap-2">
-        {groups.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
+
+      <div className="mt-4 flex flex-col gap-2.5">
+        {searching && (
+          <div aria-live="polite" aria-busy="true">
+            <DiscoverySkeleton />
+            <DiscoverySkeleton />
+          </div>
+        )}
+
+        {!searching && error && (
+          <div className="flex flex-col items-center justify-center px-6 py-16 text-center" aria-live="assertive">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-red-400/30 bg-red-500/10">
+              <AlertTriangle className="w-6 h-6 text-red-300" />
+            </div>
+            <p className="font-medium mb-1">Impossibile caricare i risultati della ricerca.</p>
+            <p className="mb-4 max-w-sm text-sm text-zinc-500">Riprova tra qualche istante.</p>
+            <button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button>
+          </div>
+        )}
+
+        {!searching && !error && !hasResults && q.length >= 3 && <Empty icon={Search} title="Nessun risultato trovato" desc="Prova con un altro titolo." />}
+        {!searching && !error && !hasResults && q.length < 3 && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
+
+        {!searching && !error && hasResults && groups.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
       </div>
     </div>
   );
@@ -324,14 +486,14 @@ function DiscoveryTab({ search, setSearch, groups, searching, onOpen }) {
 
 function DiscoveryCard({ gr, onOpen }) {
   return (
-    <button onClick={() => onOpen(gr)} className="w-full text-left rounded-2xl bg-[#141317]/70 border border-white/5 p-2 flex gap-3 hover:border-white/10 active:scale-[0.995] transition">
-      <Poster src={gr.cover} alt={gr.title} className="w-20 shrink-0 aspect-[2/3]" />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold line-clamp-1">{gr.title}</div>
-        <div className="text-[10px] text-zinc-400">{gr.memberIds.length} media{gr.preview?.length ? ` - ${gr.preview.join(" / ")}` : ""}{gr.year ? ` - ${gr.year}` : ""}</div>
-        <div className="text-[11px] text-zinc-500 line-clamp-3 mt-1">{gr.synopsis}</div>
+    <button onClick={() => onOpen(gr)} className="group flex w-full gap-3 rounded-2xl glass p-2.5 text-left shadow-lg shadow-black/20 transition-all duration-300 hover:bg-white/[0.09] active:scale-[0.99]">
+      <Poster src={gr.cover} alt={gr.title} className="aspect-[2/3] w-[72px] shrink-0 shadow-md shadow-black/30" />
+      <div className="min-w-0 flex-1">
+        <div className="line-clamp-1 text-sm font-semibold">{gr.title}</div>
+        <div className="text-[10px] text-zinc-400">{gr.memberIds.length} media{gr.preview?.length ? ` · ${gr.preview.join(" / ")}` : ""}{gr.year ? ` · ${gr.year}` : ""}</div>
+        <div className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-zinc-500">{gr.synopsis}</div>
       </div>
-      <ChevronRight className="w-4 h-4 self-center text-zinc-600 shrink-0" />
+      <ChevronRight className="w-4 h-4 shrink-0 self-center text-zinc-600 transition-transform group-hover:translate-x-0.5" />
     </button>
   );
 }
@@ -368,13 +530,13 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
   const parts = useMemo(() => previewParts(gr.members || []), [gr]);
   const total = parts.reduce((n, p) => n + (p.episodes || 0), 0);
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-xl" onClick={onClose} />
-      <div className="relative w-full sm:max-w-lg max-h-[92vh] overflow-y-auto bg-[#121216] border-t sm:border border-white/10 rounded-t-3xl sm:rounded-3xl pb-4">
-        <div className="sticky top-0 z-10 flex items-center justify-center pt-2 pb-1 bg-[#121216]/90 backdrop-blur rounded-t-3xl">
-          <div className="w-9 h-1 rounded-full bg-white/20" />
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-2xl" onClick={onClose} />
+      <div className="relative max-h-[92vh] w-full overflow-y-auto rounded-t-3xl border border-white/15 bg-[#0d0d13]/85 pb-4 shadow-2xl shadow-black/60 backdrop-blur-2xl sm:max-w-lg sm:rounded-3xl">
+        <div className="sticky top-0 z-10 flex items-center justify-center rounded-t-3xl bg-transparent pt-2 pb-1 backdrop-blur-2xl">
+          <div className="w-9 h-1 rounded-full bg-white/25" />
         </div>
-        <button onClick={onClose} aria-label="Chiudi" className="absolute top-3 right-3 p-2 rounded-full bg-white/5 border border-white/10"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} aria-label="Chiudi" className="absolute top-3 right-3 p-2 rounded-full border border-white/10 bg-white/5"><X className="w-4 h-4" /></button>
 
         <div className="px-4 flex gap-4">
           <Poster src={gr.cover} alt={gr.title} className="w-28 shrink-0 aspect-[2/3]" />
@@ -398,7 +560,7 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
           <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">Stagioni, film e OVA</div>
           <div className="flex flex-col gap-1.5">
             {parts.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 p-2 rounded-2xl bg-white/[0.03] border border-white/5">
+              <div key={p.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-2">
                 <div className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center ${p.finished ? "bg-violet-500 border-violet-400" : "border-white/20"}`}>{p.finished && <Check className="w-3.5 h-3.5" />}</div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[13px] line-clamp-1">{p.title}</div>
@@ -419,7 +581,7 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
           </div>
         )}
 
-        <div className="sticky bottom-0 mt-5 px-4 pt-2 pb-1 bg-[#121216]/90 backdrop-blur">
+        <div className="sticky bottom-0 mt-5 bg-[#0d0d13]/85 px-4 pt-2 pb-1 backdrop-blur-2xl">
           {exists ? (
             <button onClick={() => onRemove(exists)} disabled={busy} className="w-full py-3 rounded-2xl bg-white/5 border border-white/10 text-sm font-medium text-red-300 flex items-center justify-center gap-2 disabled:opacity-60">
               <Trash2 className="w-4 h-4" />Rimuovi dalla WatchList
@@ -438,16 +600,17 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
 function WatchlistTab({ list, onOpen }) {
   if (!list.length) return <Empty icon={Bookmark} title="WatchList vuota" desc="Vai su Discovery e aggiungi il tuo primo titolo." />;
   return (
-    <div className="px-3 pt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+    <div className="mx-auto grid max-w-5xl grid-cols-2 gap-3 px-3 pt-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
       {list.map((x) => {
         const s = computeStatus(x.fr, x.en);
         return (
-          <button key={x.fid} onClick={() => onOpen(x.fid)} className="relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/5 bg-[#141317]/70 text-left active:scale-[0.99] transition">
+          <button key={x.fid} onClick={() => onOpen(x.fid)} className="group relative aspect-[2/3] w-full overflow-hidden rounded-2xl glass text-left shadow-lg shadow-black/30 transition-all duration-300 active:scale-[0.98]">
             <Poster src={x.fr.cover} alt={x.fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-2 pb-2 pt-8">
-              <div className="text-xs font-medium line-clamp-1">{x.fr.title}</div>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${STATUS_STYLES[s.key]}`}>{s.label}</span>
+            <div className="absolute inset-0 ring-1 ring-inset ring-white/10 rounded-2xl pointer-events-none" />
+            <div className="absolute inset-x-0 bottom-0 rounded-b-2xl bg-gradient-to-t from-black/95 via-black/55 to-transparent px-2.5 pb-2.5 pt-10">
+              <div className="line-clamp-1 text-xs font-medium">{x.fr.title}</div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className={`rounded-full border px-1.5 py-0.5 text-[9px] ${STATUS_STYLES[s.key]}`}>{s.label}</span>
                 <span className="text-[9px] text-zinc-400">{s.pct}%</span>
               </div>
             </div>
@@ -483,14 +646,14 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#0b0b0f]/95 backdrop-blur-xl overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07070b]/92 backdrop-blur-2xl">
       <div className="min-h-full pb-24">
         <div className="relative h-44">
           <Poster src={fr.banner || fr.cover} alt={fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0b0b0f] via-[#0b0b0f]/45 to-transparent" />
-          <button onClick={onClose} aria-label="Indietro" className="absolute top-3 left-3 p-2 rounded-full bg-black/40 border border-white/10"><ChevronLeft className="w-4 h-4" /></button>
+          <div className="absolute inset-0 bg-gradient-to-t from-[#07070b] via-[#07070b]/45 to-transparent" />
+          <button onClick={onClose} aria-label="Indietro" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute left-3 rounded-2xl border border-white/15 bg-black/40 p-2.5 backdrop-blur-xl active:scale-95 transition"><ChevronLeft className="w-4 h-4" /></button>
           <div className="absolute bottom-3 left-3 right-3 flex items-end gap-3">
-            <Poster src={fr.cover} alt={fr.title} className="w-16 shrink-0 aspect-[2/3]" />
+            <Poster src={fr.cover} alt={fr.title} className="w-16 shrink-0 aspect-[2/3] shadow-lg shadow-black/50" />
             <div className="flex-1 min-w-0 pb-0.5">
               <div className="text-base font-semibold line-clamp-2 leading-snug">{fr.title}</div>
               <div className="text-[11px] text-zinc-400 mt-0.5">{s.done}/{s.total} - {s.pct}%</div>
@@ -520,7 +683,7 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
               const isOpen = openId === p.id;
               const pct = items.length ? Math.round((done / items.length) * 100) : 0;
               return (
-                <div key={p.id} className="rounded-2xl bg-[#141317]/70 border border-white/5 overflow-hidden">
+                <div key={p.id} className="overflow-hidden rounded-2xl glass shadow-lg shadow-black/20">
                   <div
                     draggable
                     onDragStart={() => setDrag({ type: "part", from: pi })}
@@ -557,7 +720,7 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
                             onDragStart={() => setDrag({ type: "item", partId: p.id, from: ii })}
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={() => { if (drag && drag.type === "item" && drag.partId === p.id) onReorderItem(fid, p.id, drag.from, ii); setDrag(null); }}
-                            className={`flex items-center gap-2.5 p-2 rounded-xl bg-white/[0.03] border border-white/5 ${checked ? "opacity-60" : ""}`}
+                            className={`flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.05] p-2 ${checked ? "opacity-60" : ""}`}
                           >
                             <button onClick={() => onCheck(fid, it.id)} aria-label="Spunta episodio" className={`w-6 h-6 shrink-0 rounded-md border flex items-center justify-center ${checked ? "bg-violet-500 border-violet-400" : "border-white/20"}`}>{checked && <Check className="w-4 h-4" />}</button>
                             <Poster src={it.thumb} alt={it.title} className="w-20 shrink-0 aspect-video" rounded="rounded-lg" />
@@ -601,30 +764,32 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
 
 function SettingsSheet({ onClose, onExport, onImport, lastSync }) {
   return (
-    <div className="fixed inset-0 z-50 bg-[#0b0b0f]/95 backdrop-blur-xl overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07070b]/92 backdrop-blur-2xl">
       <div className="min-h-full pb-20">
-        <div className="px-3 pt-3 flex items-center justify-between">
-          <div className="flex items-center gap-2"><Settings className="w-4 h-4" /><span className="text-sm font-medium">Impostazioni</span></div>
-          <button onClick={onClose} aria-label="Chiudi" className="p-2 rounded-full bg-white/5"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="px-3 mt-4 flex flex-col gap-3">
-          <div className="rounded-2xl bg-[#141317]/70 border border-white/5 p-3">
-            <div className="text-sm font-medium mb-2">Sincronizzazione</div>
-            <div className="text-[11px] text-zinc-400">Ultimo aggiornamento: {lastSync ? new Date(lastSync).toLocaleString() : "Mai"}</div>
-            <div className="text-[11px] text-zinc-500 mt-1">La WatchList viene aggiornata automaticamente ogni volta che apri l'app, in secondo piano.</div>
+        <div className="mx-auto max-w-2xl px-3" style={{ paddingTop: "calc(env(safe-area-inset-top) + 12px)" }}>
+          <div className="flex items-center justify-between">
+            <div className="glass flex items-center gap-2 rounded-2xl px-3 py-2"><Settings className="w-4 h-4" /><span className="text-sm font-medium">Impostazioni</span></div>
+            <button onClick={onClose} aria-label="Chiudi" className="glass rounded-2xl p-2.5 active:scale-95 transition"><X className="w-4 h-4" /></button>
           </div>
-          <div className="rounded-2xl bg-[#141317]/70 border border-white/5 p-3">
-            <div className="text-sm font-medium mb-2">Dati</div>
-            <div className="flex gap-2">
-              <button onClick={onExport} className="flex-1 py-2 rounded-2xl bg-white/5 border border-white/5 text-sm">Esporta JSON</button>
-              <label className="flex-1 py-2 rounded-2xl bg-white/5 border border-white/5 text-sm text-center cursor-pointer">
-                Importa JSON
-                <input type="file" accept="application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
-              </label>
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="rounded-2xl glass p-3.5 shadow-lg shadow-black/20">
+              <div className="text-sm font-medium mb-2">Sincronizzazione</div>
+              <div className="text-[11px] text-zinc-400">Ultimo aggiornamento: {lastSync ? new Date(lastSync).toLocaleString() : "Mai"}</div>
+              <div className="text-[11px] text-zinc-500 mt-1">La WatchList viene aggiornata automaticamente ogni volta che apri l'app, in secondo piano.</div>
             </div>
-          </div>
-          <div className="rounded-2xl bg-[#141317]/70 border border-white/5 p-3 text-[11px] text-zinc-400">
-            L'ordine dei gruppi, l'ordine degli episodi e gli episodi eliminati con lo swipe sono strati personalizzati: la sincronizzazione non li modifica mai. Aggiunge solo le nuove stagioni, film e OVA in coda e arricchisce titoli e immagini degli episodi.
+            <div className="rounded-2xl glass p-3.5 shadow-lg shadow-black/20">
+              <div className="text-sm font-medium mb-2">Dati</div>
+              <div className="flex gap-2">
+                <button onClick={onExport} className="flex-1 rounded-2xl border border-white/10 bg-white/5 py-2 text-sm active:scale-95 transition">Esporta JSON</button>
+                <label className="flex-1 cursor-pointer rounded-2xl border border-white/10 bg-white/5 py-2 text-center text-sm active:scale-95 transition">
+                  Importa JSON
+                  <input type="file" accept="application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+                </label>
+              </div>
+            </div>
+            <div className="rounded-2xl glass p-3.5 text-[11px] leading-relaxed text-zinc-400 shadow-lg shadow-black/20">
+              L'ordine dei gruppi, l'ordine degli episodi e gli episodi eliminati con lo swipe sono strati personalizzati: la sincronizzazione non li modifica mai. Aggiunge solo le nuove stagioni, film e OVA in coda e arricchisce titoli e immagini degli episodi.
+            </div>
           </div>
         </div>
       </div>
