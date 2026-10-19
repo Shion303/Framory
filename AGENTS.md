@@ -8,15 +8,17 @@ Start with `README.md` for local setup.
 
 ## Key Files
 
-- `src/`: frontend application source.
-- `src/lib/api/`: local data layer (IndexedDB collections + file uploads).
-- `src/lib/db/database.js`: Dexie database schema.
-- `src/lib/tmdb.js`: TMDB client for external TV/anime metadata.
-- `vite.config.js`: Vite config with `@` → `src` alias.
+- `src/App.jsx`: the whole UI (Home, Discovery, Watchlist, Detail, Settings).
+- `src/framory.js`: data layer — Dexie schema, AniList/Jikan providers, franchise
+  grouping, episode loading, user-override model, background sync.
+- `vite.config.js`: Vite + PWA config with `@` → `src` alias.
+- `eslint.config.js` / `jsconfig.json`: lint/typecheck the live `src/**` files.
 
 ## Working Notes
 
 - Use `npm run dev` for local development.
 - User data is persisted in the browser via IndexedDB. Do not reintroduce a hosted BaaS unless requested.
-- Keep TMDB as the external catalog source.
-- Run the relevant checks from `package.json` before finishing code changes.
+- Catalog source is AniList (primary) with Jikan/MAL as fallback and for episode titles. Keep TMDB out of the anime flow.
+- Episode titles/thumbnails come from AniList `Media.streamingEpisodes` (Crunchyroll); Jikan provides titles when AniList has none.
+- User overrides (`checked`, `removed`, `order`, `partOrder`, `status`) live in the `entries` table and must never be touched by sync.
+- Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.
