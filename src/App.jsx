@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, bumpDeleted } from "./framory";
+import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
@@ -256,6 +256,7 @@ export default function App() {
       cacheRef.current.delete(key);
       cacheRef.current.set(key, hit);
       setGroups(hit.g);
+      setSearchError(false);
       setSearching(false);
       return;
     }
@@ -264,13 +265,15 @@ export default function App() {
     const seq = ++searchSeq.current;
     setSearching(true);
     try {
-      const g = await searchGroups(q, ctrl.signal);
+      const { groups: g, failed } = await searchGroupsDetailed(q, ctrl.signal);
       if (ctrl.signal.aborted || seq !== searchSeq.current) return;
       const safe = (Array.isArray(g) ? g : []).map(normalizeGroup).filter(Boolean);
-      cacheRef.current.set(key, { g: safe, t: Date.now() });
-      if (cacheRef.current.size > CACHE_MAX) cacheRef.current.delete(cacheRef.current.keys().next().value);
+      if (!failed || safe.length) {
+        cacheRef.current.set(key, { g: safe, t: Date.now() });
+        if (cacheRef.current.size > CACHE_MAX) cacheRef.current.delete(cacheRef.current.keys().next().value);
+      }
       setGroups(safe);
-      setSearchError(false);
+      setSearchError(!!failed && safe.length === 0);
       setSearching(false);
     } catch (e) {
       if (e?.name === "AbortError" || ctrl.signal.aborted || seq !== searchSeq.current) return;
@@ -282,6 +285,15 @@ export default function App() {
   }, []);
 
   const retrySearch = useCallback(() => { cacheRef.current.delete(search.trim().toLowerCase()); doSearch(search); }, [search, doSearch]);
+
+  const onSearchChange = useCallback((value) => {
+    const v = typeof value === "string" ? value : "";
+    setSearch(v);
+    setSearchError(false);
+    const q = v.trim();
+    if (q.length < 3) { setGroups([]); setSearching(false); }
+    else setSearching(true);
+  }, []);
 
   useEffect(() => {
     const q = search.trim();
@@ -448,9 +460,9 @@ export default function App() {
       </header>
 
       <main className="pb-36">
-        <ErrorBoundary key={`${tab}-${groups.length}`} onReset={() => setGroups([])}>
+        <ErrorBoundary resetKey={`${tab}|${search}`} onReset={() => { setGroups([]); setSearchError(false); }}>
           {tab === "home" && <HomeTab list={list} onOpen={setDetailId} onGoDiscovery={() => setTab("discovery")} />}
-          {tab === "discovery" && <DiscoveryTab search={search} setSearch={setSearch} groups={groups} searching={searching} error={searchError} onRetry={retrySearch} onOpen={setPreview} />}
+          {tab === "discovery" && <DiscoveryTab search={search} setSearch={onSearchChange} groups={groups} searching={searching} error={searchError} onRetry={retrySearch} onOpen={setPreview} />}
           {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} />}
         </ErrorBoundary>
       </main>
@@ -490,6 +502,9 @@ export default function App() {
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
+  componentDidUpdate(prevProps) {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) this.setState({ error: null });
+  }
   componentDidCatch(error, info) {
     console.warn("[render]", error, info?.componentStack);
     if (typeof window !== "undefined" && window.__framoryErrors) window.__framoryErrors.push({ error, info });
@@ -502,8 +517,8 @@ class ErrorBoundary extends React.Component {
         <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-red-400/30 bg-red-500/10">
           <AlertTriangle className="w-6 h-6 text-red-300" />
         </div>
-        <p className="font-medium mb-1">Impossibile caricare i risultati della ricerca.</p>
-        <p className="text-sm text-zinc-500 mb-4 max-w-sm">Riprova. Se il problema continua, cambia tab e torna qui.</p>
+        <p className="font-medium mb-1">Qualcosa è andato storto.</p>
+        <p className="text-sm text-zinc-500 mb-4 max-w-sm">Riprova: cambiando ricerca o tab la schermata si ripristina automaticamente.</p>
         <button onClick={this.reset} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm active:scale-95 transition">Riprova</button>
       </div>
     );
@@ -593,9 +608,10 @@ function Card({ x, onOpen }) {
   );
 }
 
-function DiscoveryTab({ search, setSearch, groups, searching, error, onRetry, onOpen }) {
+function DiscoveryTab({ search, setSearch, groups = [], searching, error, onRetry, onOpen }) {
   const q = search.trim();
-  const hasResults = groups.length > 0;
+  const list = Array.isArray(groups) ? groups : [];
+  const hasResults = list.length > 0;
   return (
     <div className="mx-auto max-w-2xl px-3 pt-4">
       <div className="relative">
@@ -605,7 +621,7 @@ function DiscoveryTab({ search, setSearch, groups, searching, error, onRetry, on
           onChange={(e) => setSearch(e.target.value)}
           inputMode="search"
           enterKeyHint="search"
-          placeholder="Cerca anime (MAL / AniList)"
+          placeholder="Cerca anime (Jikan / AniList)"
           className="w-full glass rounded-2xl py-3 pl-10 pr-10 text-sm outline-none transition placeholder:text-zinc-500 focus:border-violet-400/40 focus:bg-white/[0.08]"
         />
         {search && (
@@ -623,21 +639,18 @@ function DiscoveryTab({ search, setSearch, groups, searching, error, onRetry, on
           </div>
         )}
 
-        {!searching && error && (
-          <div className="flex flex-col items-center justify-center px-6 py-16 text-center" aria-live="assertive">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-red-400/30 bg-red-500/10">
-              <AlertTriangle className="w-6 h-6 text-red-300" />
-            </div>
-            <p className="font-medium mb-1">Impossibile caricare i risultati della ricerca.</p>
-            <p className="mb-4 max-w-sm text-sm text-zinc-500">Riprova tra qualche istante.</p>
-            <button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button>
-          </div>
+        {!searching && q.length < 3 && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
+
+        {!searching && !hasResults && q.length >= 3 && (
+          <Empty
+            icon={error ? AlertTriangle : Search}
+            title="Nessun risultato trovato"
+            desc={error ? "La ricerca non è andata a buon fine. Controlla la connessione e riprova." : "Prova con un altro titolo."}
+            action={error ? <button onClick={onRetry} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-sm transition active:scale-95">Riprova</button> : undefined}
+          />
         )}
 
-        {!searching && !error && !hasResults && q.length >= 3 && <Empty icon={Search} title="Nessun risultato trovato" desc="Prova con un altro titolo." />}
-        {!searching && !error && !hasResults && q.length < 3 && <Empty icon={Sparkles} title="Cerca un anime" desc="Digita almeno 3 caratteri per iniziare la ricerca." />}
-
-        {!searching && !error && hasResults && groups.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
+        {!searching && hasResults && list.map((gr) => <DiscoveryCard key={gr.key} gr={gr} onOpen={onOpen} />)}
       </div>
     </div>
   );

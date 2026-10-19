@@ -105,7 +105,7 @@ async function alQuery(query, variables, signal) {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const res = await apiFetch("https://graphql.anilist.co", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, variables }),
   }, { ms: 9000, signal });
   if (!res.ok) throw new Error(`anilist ${res.status}`);
@@ -170,7 +170,7 @@ const isMedia = (m) => !!m && typeof m.id === "string" && !!m.id.trim() && typeo
 const cleanMedia = (arr) => (Array.isArray(arr) ? arr.filter(isMedia) : []);
 
 async function jikanSearch(q, signal) {
-  const json = await jikanFetch(`/anime?q=${encodeURIComponent(q)}&limit=25&sfw=true&order_by=members&sort=desc`, signal);
+  const json = await jikanFetch(`/anime?q=${encodeURIComponent(q)}&limit=15&sfw=true&order_by=members&sort=desc`, signal);
   const raw = json?.data;
   return cleanMedia((Array.isArray(raw) ? raw : []).map(jikanToMedia));
 }
@@ -180,17 +180,31 @@ async function alSearch(q, signal) {
   return cleanMedia((Array.isArray(raw) ? raw : []).map(alToMedia));
 }
 
+// Prima risposta NON vuota vince; se tutte falliscono/vuote -> []. Non lancia mai
+// (tranne cancellazione). Così bloccare un provider non blocca la ricerca.
+function raceNonEmpty(tasks) {
+  return new Promise((resolve) => {
+    let pending = tasks.length;
+    let settled = false;
+    let errored = 0;
+    const finish = (media, failed) => { if (!settled) { settled = true; resolve({ media, failed }); } };
+    if (!pending) return finish([], false);
+    for (const task of tasks) {
+      Promise.resolve(task)
+        .then((res) => { if (Array.isArray(res) && res.length) finish(res, false); else if (--pending === 0) finish([], errored === tasks.length); })
+        .catch(() => { errored += 1; if (--pending === 0) finish([], errored === tasks.length); });
+    }
+  });
+}
+
+// Jikan v4 REST (GET semplice, nessun header custom -> preflight-free) in parallelo
+// ad AniList GraphQL: qualunque risponda per primo con risultati vince. Non lancia mai.
 async function providerSearch(q, signal) {
-  if (!q || !q.trim()) return [];
-  let primary = [];
-  try {
-    primary = await alSearch(q, signal);
-  } catch (e) { rethrowAbort(e); console.warn("[api] anilist search fail", e); }
-  if (primary.length) return primary;
-  try {
-    return await jikanSearch(q, signal);
-  } catch (e) { rethrowAbort(e); console.warn("[api] jikan search fail", e); }
-  return [];
+  if (!q || !q.trim()) return { media: [], failed: false };
+  return raceNonEmpty([
+    jikanSearch(q, signal).catch((e) => { if (!isAbort(e)) console.warn("[api] jikan search", e); throw e; }),
+    alSearch(q, signal).catch((e) => { if (!isAbort(e)) console.warn("[api] anilist search", e); throw e; }),
+  ]);
 }
 async function providerGetMedia(ids) {
   const uniq = [...new Set((ids || []).filter(Boolean))];
@@ -497,21 +511,32 @@ function groupResults(results, edges) {
     .sort((a, b) => (b.memberIds.length - a.memberIds.length) || (groupScore(b.rep) - groupScore(a.rep)));
 }
 
-async function searchGroups(q, signal) {
-  const res = await providerSearch(q, signal);
-  if (!res.length) return [];
+async function searchGroupsDetailed(q, signal) {
+  const { media, failed } = await providerSearch(q, signal);
+  if (!media.length) return { groups: [], failed };
   let edges = { edges: new Map(), discovered: [] };
   try {
-    edges = await discoverRelations(res, { maxRounds: 3, budgetMs: 6000, signal });
+    edges = await discoverRelations(media, { maxRounds: 3, budgetMs: 6000, signal });
   } catch (e) {
     rethrowAbort(e);
     console.warn("[group] relations failed, using base results", e);
   }
   try {
-    return groupResults(res, edges);
+    return { groups: groupResults(media, edges), failed: false };
   } catch (e) {
     console.warn("[group] grouping failed, using base results", e);
-    return GroupFallback(res);
+    return { groups: GroupFallback(media), failed: false };
+  }
+}
+
+// Contratto pubblico: ritorna SEMPRE un array (mai lancia). Usato dai test/altri consumer.
+async function searchGroups(q, signal) {
+  try {
+    return (await searchGroupsDetailed(q, signal)).groups;
+  } catch (e) {
+    if (isAbort(e)) throw e;
+    console.warn("[search] failed", e);
+    return [];
   }
 }
 
@@ -908,7 +933,7 @@ export function bumpDeleted(deleted, id, when = Date.now()) {
 }
 
 export {
-  searchGroups, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
+  searchGroups, searchGroupsDetailed, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
   providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
   orderedParts, partItemsMap, reorderParts, reorderPartItems,
   titleKey, syncLibrary,

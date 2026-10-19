@@ -27,7 +27,11 @@ Start with `README.md` for local setup.
   devices share the fixed `VITE_FRAMORY_LIBRARY_ID` row (default `framory-global`).
 - Cross-device merge is per-item last-write-wins by `updatedAt` with deletion tombstones
   (`deleted` map), so both devices can edit without losing data.
-- Catalog source is AniList (primary) with Jikan/MAL as fallback and for episode titles. Keep TMDB out of the anime flow.
+- Discovery search runs Jikan v4 REST (`/v4/anime?q=...&limit=15`, preflight-free GET)
+  and AniList GraphQL **in parallel**; the first non-empty response wins, so blocking one
+  provider never breaks search. `searchGroupsDetailed` reports `failed` when every provider
+  errored (drives the retry affordance); `searchGroups` always returns an array and never
+  throws. Keep TMDB out of the anime flow.
 - Episode titles/thumbnails come from AniList `Media.streamingEpisodes` (Crunchyroll); Jikan provides titles when AniList has none.
 - Catalog sync (`syncLibrary`) enriches franchises but must never overwrite user overrides
   (`checked`, `removed`, `order`, `partOrder`, `status`) in `entries`. Cloud sync *does*
