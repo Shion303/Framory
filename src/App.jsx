@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems } from "./framory";
+import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, bumpDeleted } from "./framory";
+import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
 const CACHE_TTL = 10 * 60 * 1000;
@@ -73,6 +74,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [addedKey, setAddedKey] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [syncState, setSyncState] = useState(syncEnabled ? "connecting" : "off");
   const fRef = useRef({});
   const eRef = useRef({});
   const syncRef = useRef(false);
@@ -81,8 +83,58 @@ export default function App() {
   const abortRef = useRef(null);
   const addingRef = useRef(false);
   const genRef = useRef(new Map());
+  const docTs = useRef(0);
+  const deletedRef = useRef({});
+  const pushTimer = useRef(null);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+
+  const persistStores = useCallback(async (fr, en) => {
+    try {
+      await db.transaction("rw", db.franchises, db.entries, async () => {
+        await db.franchises.clear();
+        await db.entries.clear();
+        const fl = Object.values(fr); if (fl.length) await db.franchises.bulkPut(fl);
+        const el = Object.values(en); if (el.length) await db.entries.bulkPut(el);
+      });
+    } catch (e) { console.warn("[idb] persist", e); }
+  }, []);
+
+  const schedulePush = useCallback(() => {
+    if (!syncEnabled) return;
+    clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(async () => {
+      pushTimer.current = null;
+      const ts = Date.now();
+      setSyncState("syncing");
+      const doc = buildDoc(fRef.current, eRef.current, deletedRef.current, ts);
+      const r = await pushLibrary(doc);
+      if (r.ok) {
+        docTs.current = Math.max(docTs.current, ts);
+        setSyncState("online");
+        setLastSync(Date.now());
+        db.meta.put({ key: "lastSync", value: Date.now() }).catch(() => {});
+      } else {
+        setSyncState("error");
+      }
+    }, 800);
+  }, []);
+
+  const mergeRemote = useCallback((remoteDoc) => {
+    const remote = normalizeDoc(remoteDoc);
+    if (remote.updatedAt <= docTs.current) return;
+    const local = buildDoc(fRef.current, eRef.current, deletedRef.current, docTs.current);
+    const merged = mergeDocs(local, remote);
+    const stores = docToStores(merged);
+    deletedRef.current = merged.deleted;
+    docTs.current = merged.updatedAt;
+    fRef.current = stores.franchises;
+    eRef.current = stores.entries;
+    setFranchises({ ...stores.franchises });
+    setEntries({ ...stores.entries });
+    setLastSync(Date.now());
+    persistStores(stores.franchises, stores.entries);
+  }, [persistStores]);
 
   const runSync = useCallback(async (auto) => {
     if (syncRef.current) return;
@@ -98,6 +150,7 @@ export default function App() {
         fRef.current = next;
         setFranchises({ ...next });
         showToast(auto ? `WatchList aggiornata (${changed.length})` : `Sincronizzato (${changed.length})`);
+        schedulePush();
       } else if (!auto) {
         showToast("Tutto aggiornato");
       }
@@ -109,31 +162,81 @@ export default function App() {
     }
     syncRef.current = false;
     setSyncing(false);
-  }, []);
+  }, [schedulePush]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      let fm = {}, em = {}, ls = null;
       try {
-        const [fr, er, ls] = await db.transaction("r", db.franchises, db.entries, db.meta, () =>
+        const [fr, er, lsr] = await db.transaction("r", db.franchises, db.entries, db.meta, () =>
           Promise.all([db.franchises.toArray(), db.entries.toArray(), db.meta.get("lastSync")]),
         );
-        const fm = {}, em = {};
         fr.forEach((r) => { fm[r.id] = r; });
         er.forEach((r) => { em[r.franchiseId] = r; });
-        fRef.current = fm;
-        eRef.current = em;
-        if (cancelled) return;
-        setFranchises(fm);
-        setEntries(em);
-        setLastSync(ls?.value || null);
+        ls = lsr?.value || null;
       } catch (e) { console.error("[load]", e); }
       if (cancelled) return;
+
+      let remoteMissing = false;
+      if (syncEnabled) {
+        setSyncState("connecting");
+        const remote = await pullLibrary();
+        if (cancelled) return;
+        if (remote) {
+          const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), normalizeDoc(remote));
+          const stores = docToStores(merged);
+          fm = stores.franchises; em = stores.entries;
+          deletedRef.current = merged.deleted;
+          docTs.current = merged.updatedAt;
+          persistStores(fm, em);
+          setSyncState("online");
+        } else {
+          remoteMissing = true;
+          setSyncState("online");
+        }
+      }
+
+      fRef.current = fm;
+      eRef.current = em;
+      setFranchises(fm);
+      setEntries(em);
+      setLastSync(ls);
       setReady(true);
+
+      if (syncEnabled && remoteMissing) schedulePush();
       setTimeout(() => { if (!cancelled) runSync(true); }, 350);
     })();
     return () => { cancelled = true; };
-  }, [runSync]);
+  }, [runSync, persistStores, schedulePush]);
+
+  useEffect(() => {
+    if (!ready || !syncEnabled) return undefined;
+    let active = true;
+    let cleanup = null;
+    subscribeLibrary(
+      (doc) => { if (active) { setSyncState("online"); mergeRemote(doc); } },
+      (status) => { if (active && status) setSyncState(status === "SUBSCRIBED" ? "online" : "connecting"); },
+    ).then((fn) => { if (active) cleanup = fn; else fn(); }).catch(() => { setSyncState(syncEnabled ? "error" : "off"); });
+    return () => { active = false; if (cleanup) cleanup(); };
+  }, [ready, mergeRemote]);
+
+  useEffect(() => {
+    if (!ready || !syncEnabled) return undefined;
+    const flush = () => {
+      if (document.visibilityState === "hidden" && pushTimer.current) {
+        clearTimeout(pushTimer.current);
+        pushTimer.current = null;
+        const ts = Date.now();
+        pushLibrary(buildDoc(fRef.current, eRef.current, deletedRef.current, ts)).then((r) => {
+          if (r.ok) docTs.current = Math.max(docTs.current, ts);
+          setSyncState(r.ok ? "online" : "error");
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", flush);
+    return () => document.removeEventListener("visibilitychange", flush);
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -205,6 +308,7 @@ export default function App() {
     eRef.current = { ...eRef.current, [fid]: next };
     setEntries({ ...eRef.current });
     db.entries.put(next).catch((e) => console.warn("[entry] persist", e));
+    schedulePush();
   };
   const patchEntry = (fid, fn) => putEntry(fid, fn(eRef.current[fid] || defaultEntry(fid)));
   const toggleCheck = (fid, itemId) => patchEntry(fid, (en) => {
@@ -238,8 +342,9 @@ export default function App() {
       fRef.current = { ...fRef.current, [fid]: fr };
       setFranchises({ ...fRef.current });
       await db.franchises.put(fr);
+      schedulePush();
     } catch (e) { console.warn("[deepen]", e); }
-  }, []);
+  }, [schedulePush]);
 
   useEffect(() => {
     if (!ready) return;
@@ -280,6 +385,7 @@ export default function App() {
         await db.entries.put(en);
       }).catch((e) => console.warn("[add] persist", e));
 
+      schedulePush();
       genRef.current.set(fid, (genRef.current.get(fid) || 0) + 1);
       deepenFranchise(fid, members.map((m) => m.id), gr.title, genRef.current.get(fid));
     } catch (e) {
@@ -289,7 +395,7 @@ export default function App() {
       addingRef.current = false;
       setTimeout(() => setAddedKey((cur) => (cur === gr.key ? null : cur)), 1200);
     }
-  }, [findExisting, deepenFranchise]);
+  }, [findExisting, deepenFranchise, schedulePush]);
 
   const removeFromWatchlist = (fid) => {
     try {
@@ -309,6 +415,8 @@ export default function App() {
         await db.franchises.delete(fid);
         await db.entries.delete(fid);
       }).catch((e) => console.warn("[remove] persist", e));
+      deletedRef.current = bumpDeleted(deletedRef.current, fid);
+      schedulePush();
     } catch (e) { console.warn("[remove]", e); showToast("Errore rimozione"); }
   };
 
@@ -372,7 +480,7 @@ export default function App() {
           onAdd={addToWatchlist} onRemove={removeFromWatchlist} onSetStatus={setStatus}
         />
       )}
-      {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={importData} lastSync={lastSync} />}
+      {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={importData} lastSync={lastSync} syncState={syncState} />}
 
       <div className={`fixed left-1/2 z-50 -translate-x-1/2 px-4 py-2 rounded-full border border-white/15 bg-black/60 backdrop-blur-2xl text-xs shadow-xl transition-all duration-300 ${toast ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"}`} style={{ bottom: "calc(env(safe-area-inset-bottom) + 92px)" }}>{toast}</div>
     </div>
@@ -482,20 +590,6 @@ function Card({ x, onOpen }) {
       </div>
       <ChevronRight className="w-4 h-4 shrink-0 self-center text-zinc-600 transition-transform group-hover:translate-x-0.5" />
     </button>
-  );
-}
-
-function SkeletonRow() {
-  return (
-    <div className="flex gap-3 rounded-2xl glass p-2.5" aria-hidden>
-      <div className="aspect-[2/3] w-[72px] shrink-0 animate-pulse rounded-2xl bg-white/[0.07]" />
-      <div className="min-w-0 flex-1 space-y-2 py-1">
-        <div className="h-3 w-2/3 animate-pulse rounded-full bg-white/[0.09]" />
-        <div className="h-2.5 w-1/3 animate-pulse rounded-full bg-white/[0.07]" />
-        <div className="h-2.5 w-full animate-pulse rounded-full bg-white/[0.05]" />
-        <div className="h-2.5 w-4/5 animate-pulse rounded-full bg-white/[0.04]" />
-      </div>
-    </div>
   );
 }
 
@@ -837,7 +931,16 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
   );
 }
 
-function SettingsSheet({ onClose, onExport, onImport, lastSync }) {
+const SYNC_LABEL = {
+  off: { t: "Solo locale", c: "text-zinc-400", d: "bg-zinc-500" },
+  connecting: { t: "Connessione…", c: "text-amber-300", d: "bg-amber-400" },
+  syncing: { t: "Salvataggio…", c: "text-amber-300", d: "bg-amber-400" },
+  online: { t: "Sincronizzato", c: "text-emerald-300", d: "bg-emerald-400" },
+  error: { t: "Errore di sincronizzazione", c: "text-red-300", d: "bg-red-400" },
+};
+
+function SettingsSheet({ onClose, onExport, onImport, lastSync, syncState = "off" }) {
+  const s = SYNC_LABEL[syncState] || SYNC_LABEL.off;
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07070b]/92 backdrop-blur-2xl">
       <div className="min-h-full pb-20">
@@ -848,9 +951,12 @@ function SettingsSheet({ onClose, onExport, onImport, lastSync }) {
           </div>
           <div className="mt-4 flex flex-col gap-3">
             <div className="rounded-2xl glass p-3.5 shadow-lg shadow-black/20">
-              <div className="text-sm font-medium mb-2">Sincronizzazione</div>
-              <div className="text-[11px] text-zinc-400">Ultimo aggiornamento: {lastSync ? new Date(lastSync).toLocaleString() : "Mai"}</div>
-              <div className="text-[11px] text-zinc-500 mt-1">La WatchList viene aggiornata automaticamente ogni volta che apri l'app, in secondo piano.</div>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Sincronizzazione cloud</div>
+                <div className={`flex items-center gap-1.5 text-[11px] ${s.c}`}><span className={`h-1.5 w-1.5 rounded-full ${s.d}`} />{s.t}</div>
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-2">Ultimo aggiornamento: {lastSync ? new Date(lastSync).toLocaleString() : "Mai"}</div>
+              <div className="text-[11px] text-zinc-500 mt-1">La WatchList si allinea automaticamente tra PC e iPhone in tempo reale. Nessun codice da inserire: usa un id libreria condiviso del progetto (framory-global).</div>
             </div>
             <div className="rounded-2xl glass p-3.5 shadow-lg shadow-black/20">
               <div className="text-sm font-medium mb-2">Dati</div>
@@ -863,7 +969,7 @@ function SettingsSheet({ onClose, onExport, onImport, lastSync }) {
               </div>
             </div>
             <div className="rounded-2xl glass p-3.5 text-[11px] leading-relaxed text-zinc-400 shadow-lg shadow-black/20">
-              L'ordine dei gruppi, l'ordine degli episodi e gli episodi eliminati con lo swipe sono strati personalizzati: la sincronizzazione non li modifica mai. Aggiunge solo le nuove stagioni, film e OVA in coda e arricchisce titoli e immagini degli episodi.
+              L'ordine dei gruppi, l'ordine degli episodi e gli episodi eliminati con lo swipe sono strati personalizzati: la sincronizzazione del catalogo non li modifica mai. Aggiunge solo le nuove stagioni, film e OVA in coda e arricchisce titoli e immagini degli episodi.
             </div>
           </div>
         </div>
@@ -884,8 +990,9 @@ async function importData(file) {
   try {
     const obj = JSON.parse(await file.text());
     if (obj.app !== "Framory") throw new Error("bad");
-    if (obj.franchises) for (const f of obj.franchises) await db.franchises.put(f);
-    if (obj.entries) for (const e of obj.entries) await db.entries.put(e);
+    const now = Date.now();
+    if (obj.franchises) for (const f of obj.franchises) await db.franchises.put({ ...f, updatedAt: now });
+    if (obj.entries) for (const e of obj.entries) await db.entries.put({ ...e, updatedAt: now });
     location.reload();
   } catch { alert("Backup non valido"); }
 }

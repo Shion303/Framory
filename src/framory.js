@@ -837,6 +837,76 @@ async function syncLibrary(franchises) {
   return { changed };
 }
 
+export const SYNC_VERSION = 1;
+
+const _docList = (v) => (Array.isArray(v) ? v : []);
+const _ts = (o) => Number(o?.updatedAt) || 0;
+
+export function buildDoc(franchises, entries, deleted = {}, updatedAt = Date.now()) {
+  return {
+    v: SYNC_VERSION,
+    updatedAt: Number(updatedAt) || Date.now(),
+    franchises: Object.values(franchises || {}).filter((f) => f && f.id),
+    entries: Object.values(entries || {}).filter((e) => e && e.franchiseId),
+    deleted: { ...(deleted || {}) },
+  };
+}
+
+export function normalizeDoc(doc) {
+  const d = doc && typeof doc === "object" ? doc : {};
+  const deleted = {};
+  for (const [id, t] of Object.entries(d.deleted && typeof d.deleted === "object" ? d.deleted : {})) {
+    const n = Number(t) || 0;
+    if (id && n) deleted[id] = n;
+  }
+  return { v: SYNC_VERSION, updatedAt: Number(d.updatedAt) || 0, franchises: _docList(d.franchises), entries: _docList(d.entries), deleted };
+}
+
+export function docToStores(doc) {
+  const franchises = {}, entries = {};
+  for (const f of _docList(doc?.franchises)) if (f?.id) franchises[f.id] = f;
+  for (const e of _docList(doc?.entries)) if (e?.franchiseId) entries[e.franchiseId] = e;
+  return { franchises, entries };
+}
+
+export function mergeDocs(localDoc, remoteDoc) {
+  const a = normalizeDoc(localDoc), b = normalizeDoc(remoteDoc);
+  const deleted = {};
+  for (const [id, t] of Object.entries(a.deleted)) deleted[id] = Math.max(deleted[id] || 0, t);
+  for (const [id, t] of Object.entries(b.deleted)) deleted[id] = Math.max(deleted[id] || 0, t);
+
+  const pick = (la, lb, key) => {
+    const map = new Map();
+    for (const item of [...la, ...lb]) {
+      const k = item?.[key];
+      if (!k) continue;
+      const cur = map.get(k);
+      if (!cur || _ts(item) >= _ts(cur)) map.set(k, item);
+    }
+    return map;
+  };
+
+  const fr = pick(a.franchises, b.franchises, "id");
+  const en = pick(a.entries, b.entries, "franchiseId");
+
+  for (const [id, t] of Object.entries(deleted)) {
+    const f = fr.get(id); if (f && t >= _ts(f)) fr.delete(id);
+    const e = en.get(id); if (e && t >= _ts(e)) en.delete(id);
+  }
+
+  return {
+    v: SYNC_VERSION,
+    updatedAt: Math.max(a.updatedAt, b.updatedAt),
+    franchises: [...fr.values()],
+    entries: [...en.values()],
+    deleted,
+  };
+}
+
+export function bumpDeleted(deleted, id, when = Date.now()) {
+  return { ...(deleted || {}), [id]: Math.max(Number(deleted?.[id]) || 0, Number(when) || Date.now()) };
+}
+
 export {
   searchGroups, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
   providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,

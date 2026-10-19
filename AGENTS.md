@@ -10,15 +10,26 @@ Start with `README.md` for local setup.
 
 - `src/App.jsx`: the whole UI (Home, Discovery, Watchlist, Detail, Settings).
 - `src/framory.js`: data layer — Dexie schema, AniList/Jikan providers, franchise
-  grouping, episode loading, user-override model, background sync.
+  grouping, episode loading, user-override model, background catalog sync, and the
+  pure cloud-merge helpers (`buildDoc`/`normalizeDoc`/`docToStores`/`mergeDocs`/`bumpDeleted`).
+- `src/supabase.js`: optional cloud sync (env-gated). One JSON row per shared library
+  in the `watchlists` table; no manual sync codes.
+- `supabase/schema.sql`: SQL to create the `watchlists` table, RLS policies and realtime.
 - `vite.config.js`: Vite + PWA config with `@` → `src` alias.
 - `eslint.config.js` / `jsconfig.json`: lint/typecheck the live `src/**` files.
 
 ## Working Notes
 
 - Use `npm run dev` for local development.
-- User data is persisted in the browser via IndexedDB. Do not reintroduce a hosted BaaS unless requested.
+- User data is persisted in the browser via IndexedDB (`franchises`, `entries`, `meta`).
+- Cloud sync is automatic and transparent when `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`
+  are set (`.env.local`); otherwise the app runs local-only. There is no Sync Code UI:
+  devices share the fixed `VITE_FRAMORY_LIBRARY_ID` row (default `framory-global`).
+- Cross-device merge is per-item last-write-wins by `updatedAt` with deletion tombstones
+  (`deleted` map), so both devices can edit without losing data.
 - Catalog source is AniList (primary) with Jikan/MAL as fallback and for episode titles. Keep TMDB out of the anime flow.
 - Episode titles/thumbnails come from AniList `Media.streamingEpisodes` (Crunchyroll); Jikan provides titles when AniList has none.
-- User overrides (`checked`, `removed`, `order`, `partOrder`, `status`) live in the `entries` table and must never be touched by sync.
+- Catalog sync (`syncLibrary`) enriches franchises but must never overwrite user overrides
+  (`checked`, `removed`, `order`, `partOrder`, `status`) in `entries`. Cloud sync *does*
+  propagate those overrides between the user's own devices.
 - Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.

@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
     "dexie": "^4.2.1",
     "lucide-react": "^0.475.0",
     "react": "^18.2.0",
