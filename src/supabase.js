@@ -38,6 +38,28 @@ export const LIBRARY_ID = SYNC_ID;
 
 const TABLE = "watchlists";
 
+// Test di connessione esplicito, con log dettagliati per il debug.
+// Ritorna { ok, data } oppure { ok:false, reason, details }.
+export async function testConnection() {
+  if (!supabase) {
+    console.warn("Supabase non inizializzato: variabili VITE_ mancanti.");
+    return { ok: false, reason: "not-initialized" };
+  }
+  try {
+    const { data, error } = await supabase.from(TABLE).select("*").limit(1);
+    if (error) {
+      console.error("Errore connessione Supabase:", error.message, error.details);
+      return { ok: false, reason: error.message, details: error.details };
+    }
+    console.log("Connessione Supabase riuscita!", data);
+    return { ok: true, data };
+  } catch (e) {
+    const reason = String(e?.message || e);
+    console.error("Errore connessione Supabase:", reason);
+    return { ok: false, reason };
+  }
+}
+
 // Accesso anonimo: serve solo ad ottenere una sessione che soddisfi eventuali
 // policy RLS. Se l'anon-auth non è attiva si prosegue comunque.
 async function ensureSession() {
