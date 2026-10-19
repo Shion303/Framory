@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems } from "./framory";
+import { db, searchGroups, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems } from "./framory";
 
 const DEBOUNCE_MS = 350;
 const CACHE_TTL = 10 * 60 * 1000;
@@ -71,7 +71,7 @@ export default function App() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [adding, setAdding] = useState(null);
+  const [addedKey, setAddedKey] = useState(null);
   const [lastSync, setLastSync] = useState(null);
   const fRef = useRef({});
   const eRef = useRef({});
@@ -79,6 +79,8 @@ export default function App() {
   const searchSeq = useRef(0);
   const cacheRef = useRef(new Map());
   const abortRef = useRef(null);
+  const addingRef = useRef(false);
+  const genRef = useRef(new Map());
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -88,7 +90,8 @@ export default function App() {
     syncRef.current = true;
     setSyncing(true);
     try {
-      const { changed } = await syncLibrary(Object.values(fRef.current));
+      const settled = Object.values(fRef.current).filter((f) => f && !f.pending);
+      const { changed } = await syncLibrary(settled);
       if (changed.length) {
         const next = { ...fRef.current };
         for (const fr of changed) next[fr.id] = fr;
@@ -112,7 +115,9 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [fr, er, ls] = await Promise.all([db.franchises.toArray(), db.entries.toArray(), db.meta.get("lastSync")]);
+        const [fr, er, ls] = await db.transaction("r", db.franchises, db.entries, db.meta, () =>
+          Promise.all([db.franchises.toArray(), db.entries.toArray(), db.meta.get("lastSync")]),
+        );
         const fm = {}, em = {};
         fr.forEach((r) => { fm[r.id] = r; });
         er.forEach((r) => { em[r.franchiseId] = r; });
@@ -141,6 +146,7 @@ export default function App() {
     const key = q.toLowerCase();
     abortRef.current?.abort();
     abortRef.current = null;
+    setSearchError(false);
     if (q.length < 3) { setGroups([]); setSearching(false); return; }
     const hit = cacheRef.current.get(key);
     if (hit && Date.now() - hit.t < CACHE_TTL) {
@@ -175,17 +181,30 @@ export default function App() {
   const retrySearch = useCallback(() => { cacheRef.current.delete(search.trim().toLowerCase()); doSearch(search); }, [search, doSearch]);
 
   useEffect(() => {
+    const q = search.trim();
+    const key = q.toLowerCase();
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setSearchError(false);
+    if (q.length < 3) { setGroups([]); setSearching(false); return undefined; }
+    const hit = cacheRef.current.get(key);
+    if (hit && Date.now() - hit.t < CACHE_TTL) {
+      setGroups(hit.g);
+      setSearching(false);
+      return undefined;
+    }
+    setSearching(true);
     const t = setTimeout(() => doSearch(search), DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [search, doSearch]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const putEntry = async (fid, en) => {
+  const putEntry = (fid, en) => {
     const next = { ...en, updatedAt: Date.now() };
-    await db.entries.put(next);
     eRef.current = { ...eRef.current, [fid]: next };
     setEntries({ ...eRef.current });
+    db.entries.put(next).catch((e) => console.warn("[entry] persist", e));
   };
   const patchEntry = (fid, fn) => putEntry(fid, fn(eRef.current[fid] || defaultEntry(fid)));
   const toggleCheck = (fid, itemId) => patchEntry(fid, (en) => {
@@ -206,33 +225,75 @@ export default function App() {
     return hit ? hit[0] : null;
   }, []);
 
-  const addToWatchlist = async (gr) => {
-    if (findExisting(gr)) { showToast("Gia nella WatchList"); return; }
-    setAdding(gr.key);
+  const deepenFranchise = useCallback(async (fid, ids, title, gen) => {
     try {
-      const meds = await providerGetMedia(gr.memberIds);
-      if (!meds.length) { showToast("Impossibile caricare i dati"); return; }
-      const fr = buildFranchise(meds, gr.title);
-      if (fRef.current[fr.id]) { showToast("Gia nella WatchList"); return; }
+      const meds = await providerGetMedia(ids);
+      if (gen !== genRef.current.get(fid) || !fRef.current[fid]) return;
+      if (!meds.length) return;
+      const fr = buildFranchise(meds, title, fid);
       await loadAllEpisodes(fr.parts);
-      await db.franchises.put(fr);
-      fRef.current = { ...fRef.current, [fr.id]: fr };
+      if (gen !== genRef.current.get(fid) || !fRef.current[fid]) return;
+      fr.pending = false;
+      fr.updatedAt = Date.now();
+      fRef.current = { ...fRef.current, [fid]: fr };
       setFranchises({ ...fRef.current });
-      await putEntry(fr.id, defaultEntry(fr.id));
-      showToast("Aggiunto alla WatchList");
+      await db.franchises.put(fr);
+    } catch (e) { console.warn("[deepen]", e); }
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const pend = Object.values(fRef.current).filter((f) => f && f.pending);
+    for (const f of pend) {
+      const gen = (genRef.current.get(f.id) || 0) + 1;
+      genRef.current.set(f.id, gen);
+      deepenFranchise(f.id, f.memberIds || [], f.title, gen);
+    }
+  }, [ready, deepenFranchise]);
+
+  const addToWatchlist = useCallback(async (gr) => {
+    if (!gr || addingRef.current) return;
+    const already = findExisting(gr);
+    if (already) { showToast("Gia nella WatchList"); setPreview(null); return; }
+    const members = (Array.isArray(gr.members) && gr.members.length ? gr.members : [gr.rep]).filter(Boolean);
+    if (!members.length) { showToast("Dati non disponibili"); return; }
+
+    const nums = members.map((m) => m.malId || m.alId).filter((n) => Number.isFinite(n) && n > 0);
+    const fid = nums.length ? `f:${Math.min(...nums)}` : `f:${titleKey(gr.title).replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}`;
+    if (fRef.current[fid]) { showToast("Gia nella WatchList"); setPreview(null); return; }
+
+    addingRef.current = true;
+    try {
+      const fr = optimisticFranchise(members, gr.title, fid);
+      const en = defaultEntry(fid);
+
+      fRef.current = { ...fRef.current, [fid]: fr };
+      eRef.current = { ...eRef.current, [fid]: en };
+      setFranchises({ ...fRef.current });
+      setEntries({ ...eRef.current });
+      setAddedKey(gr.key);
       setPreview(null);
+      showToast("Aggiunto alla WatchList");
+
+      db.transaction("rw", db.franchises, db.entries, async () => {
+        await db.franchises.put(fr);
+        await db.entries.put(en);
+      }).catch((e) => console.warn("[add] persist", e));
+
+      genRef.current.set(fid, (genRef.current.get(fid) || 0) + 1);
+      deepenFranchise(fid, members.map((m) => m.id), gr.title, genRef.current.get(fid));
     } catch (e) {
       console.warn("[add]", e);
       showToast("Errore aggiunta");
     } finally {
-      setAdding(null);
+      addingRef.current = false;
+      setTimeout(() => setAddedKey((cur) => (cur === gr.key ? null : cur)), 1200);
     }
-  };
+  }, [findExisting, deepenFranchise]);
 
-  const removeFromWatchlist = async (fid) => {
+  const removeFromWatchlist = (fid) => {
     try {
-      await db.franchises.delete(fid);
-      await db.entries.delete(fid);
+      genRef.current.set(fid, (genRef.current.get(fid) || 0) + 1);
       const nf = { ...fRef.current };
       const ne = { ...eRef.current };
       delete nf[fid];
@@ -244,6 +305,10 @@ export default function App() {
       setDetailId(null);
       setPreview(null);
       showToast("Rimosso dalla WatchList");
+      db.transaction("rw", db.franchises, db.entries, async () => {
+        await db.franchises.delete(fid);
+        await db.entries.delete(fid);
+      }).catch((e) => console.warn("[remove] persist", e));
     } catch (e) { console.warn("[remove]", e); showToast("Errore rimozione"); }
   };
 
@@ -303,7 +368,7 @@ export default function App() {
       {preview && (
         <DiscoveryModal
           gr={preview} exists={previewFid} existsEn={previewFid ? entries[previewFid] : null}
-          busy={adding === preview.key} onClose={() => setPreview(null)}
+          justAdded={addedKey === preview.key} onClose={() => setPreview(null)}
           onAdd={addToWatchlist} onRemove={removeFromWatchlist} onSetStatus={setStatus}
         />
       )}
@@ -526,7 +591,7 @@ function StatusPicker({ en, onSetStatus, compact }) {
   );
 }
 
-function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, onSetStatus }) {
+function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRemove, onSetStatus }) {
   const parts = useMemo(() => previewParts(gr.members || []), [gr]);
   const total = parts.reduce((n, p) => n + (p.episodes || 0), 0);
   return (
@@ -541,7 +606,14 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
         <div className="px-4 flex gap-4">
           <Poster src={gr.cover} alt={gr.title} className="w-28 shrink-0 aspect-[2/3]" />
           <div className="min-w-0 pt-1">
-            <div className="text-base font-semibold leading-snug">{gr.title}</div>
+            <div className="flex items-start gap-2">
+              <div className="text-base font-semibold leading-snug">{gr.title}</div>
+              {justAdded && (
+                <span className="mt-0.5 flex shrink-0 items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                  <Check className="w-3 h-3" />Aggiunto
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-zinc-400 mt-1">{parts.length} elementi{gr.year ? ` - ${gr.year}` : ""}</div>
             {!!gr.preview?.length && (
               <div className="mt-2 flex flex-wrap gap-1">
@@ -583,12 +655,12 @@ function DiscoveryModal({ gr, exists, existsEn, busy, onClose, onAdd, onRemove, 
 
         <div className="sticky bottom-0 mt-5 bg-[#0d0d13]/85 px-4 pt-2 pb-1 backdrop-blur-2xl">
           {exists ? (
-            <button onClick={() => onRemove(exists)} disabled={busy} className="w-full py-3 rounded-2xl bg-white/5 border border-white/10 text-sm font-medium text-red-300 flex items-center justify-center gap-2 disabled:opacity-60">
+            <button onClick={() => onRemove(exists)} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-3 text-sm font-medium text-red-300">
               <Trash2 className="w-4 h-4" />Rimuovi dalla WatchList
             </button>
           ) : (
-            <button onClick={() => onAdd(gr)} disabled={busy} className="w-full py-3 rounded-2xl bg-violet-500 text-white text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-60">
-              {busy ? <><Loader2 className="w-4 h-4 animate-spin" />Aggiunta in corso...</> : <><Plus className="w-4 h-4" />Aggiungi alla WatchList</>}
+            <button onClick={() => onAdd(gr)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-500 py-3 text-sm font-medium text-white active:scale-[0.99] transition">
+              {justAdded ? <><Check className="w-4 h-4" />Aggiunto</> : <><Plus className="w-4 h-4" />Aggiungi alla WatchList</>}
             </button>
           )}
         </div>
@@ -673,7 +745,10 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
         <div className="px-3 mt-5">
           <div className="flex items-baseline justify-between mb-1">
             <div className="text-sm font-medium">Stagioni, film e OVA</div>
-            <div className="text-[11px] text-zinc-500">{parts.length} gruppi</div>
+            <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+              {fr.pending && <span className="flex items-center gap-1 text-violet-300"><Loader2 className="w-3 h-3 animate-spin" />Caricamento episodi</span>}
+              <span>{parts.length} gruppi</span>
+            </div>
           </div>
           <div className="text-[11px] text-zinc-500 mb-2">Tocca un gruppo per gli episodi. Trascina i gruppi per riordinarli, scorri a sinistra su un episodio per eliminarlo.</div>
           <div className="flex flex-col gap-2">

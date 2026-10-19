@@ -591,6 +591,20 @@ function buildFranchise(medias, title, exp) {
 }
 function previewParts(medias) { return planParts(medias); }
 
+function optimisticFranchise(medias, title, exp) {
+  const fr = buildFranchise(medias, title, exp);
+  fr.parts = fr.parts.map((p) => {
+    let eps = [];
+    try { eps = synthesizedEpisodes(p.media || {}); } catch {}
+    if (!eps.length) eps = defaultEpisodes(p);
+    return { ...p, episodesList: eps, episodesLoaded: false, pending: true };
+  });
+  fr.pending = true;
+  fr.createdAt = Date.now();
+  fr.updatedAt = Date.now();
+  return fr;
+}
+
 const defaultEntry = (id) => ({ franchiseId: id, status: null, checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
 
 function orderedParts(fr, en) {
@@ -825,7 +839,7 @@ async function syncLibrary(franchises) {
 
 export {
   searchGroups, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
-  providerGetMedia, buildFranchise, previewParts, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
+  providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
   orderedParts, partItemsMap, reorderParts, reorderPartItems,
   titleKey, syncLibrary,
 };
