@@ -38,28 +38,6 @@ export const LIBRARY_ID = SYNC_ID;
 
 const TABLE = "watchlists";
 
-// Test di connessione esplicito, con log dettagliati per il debug.
-// Ritorna { ok, data } oppure { ok:false, reason, details }.
-export async function testConnection() {
-  if (!supabase) {
-    console.warn("Supabase non inizializzato: variabili VITE_ mancanti.");
-    return { ok: false, reason: "not-initialized" };
-  }
-  try {
-    const { data, error } = await supabase.from(TABLE).select("*").limit(1);
-    if (error) {
-      console.error("Errore connessione Supabase:", error.message, error.details);
-      return { ok: false, reason: error.message, details: error.details };
-    }
-    console.log("Connessione Supabase riuscita!", data);
-    return { ok: true, data };
-  } catch (e) {
-    const reason = String(e?.message || e);
-    console.error("Errore connessione Supabase:", reason);
-    return { ok: false, reason };
-  }
-}
-
 // Accesso anonimo: serve solo ad ottenere una sessione che soddisfi eventuali
 // policy RLS. Se l'anon-auth non è attiva si prosegue comunque.
 async function ensureSession() {
@@ -80,10 +58,10 @@ export async function pullLibrary() {
   try {
     await ensureSession();
     const { data, error } = await supabase.from(TABLE).select("data").eq("id", SYNC_ID).maybeSingle();
-    if (error) { console.warn("[supabase] pull", error.message); return { ok: false, doc: null, error: error.message }; }
+    if (error) { console.error("Errore lettura Supabase:", error.message, error.details); return { ok: false, doc: null, error: error.message, details: error.details }; }
     const doc = data && typeof data === "object" ? data.data || null : null;
     return { ok: true, doc };
-  } catch (e) { console.warn("[supabase] pull", e); return { ok: false, doc: null, error: String(e?.message || e) }; }
+  } catch (e) { console.error("Errore lettura Supabase:", e); return { ok: false, doc: null, error: String(e?.message || e) }; }
 }
 
 // Upsert immediato dell'intera libreria sulla riga condivisa.
@@ -97,9 +75,9 @@ export async function pushLibrary(doc) {
         { id: SYNC_ID, data: doc, updated_at: new Date().toISOString() },
         { onConflict: "id" },
       );
-    if (error) { console.warn("[supabase] push", error.message); return { ok: false, error: error.message }; }
+    if (error) { console.error("Errore upsert Supabase:", error.message, error.details); return { ok: false, error: error.message, details: error.details }; }
     return { ok: true };
-  } catch (e) { console.warn("[supabase] push", e); return { ok: false, error: String(e?.message || e) }; }
+  } catch (e) { console.error("Errore upsert Supabase:", e); return { ok: false, error: String(e?.message || e) }; }
 }
 
 // Canale Realtime della riga condivisa. Ritorna il cleanup.

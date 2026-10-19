@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
-import { syncEnabled, testConnection, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
+import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
 const CACHE_TTL = 10 * 60 * 1000;
@@ -244,16 +244,12 @@ export default function App() {
       let offlineNotice = false;
       if (syncEnabled) {
         setSyncState("connecting");
-        // Test di lettura esplicito: logga sempre l'esito (utile in DevTools).
-        const test = await testConnection();
-        if (cancelled) return;
-        if (!test.ok) { offlineNotice = true; setSyncState("error"); }
-
+        // Lettura iniziale sulla riga globale condivisa id = SYNC_ID ("global_user_watchlist").
         const pull = await pullLibrary();
         if (cancelled) return;
-        if (pull?.ok) offlineNotice = false; // raggiunto il cloud (anche senza riga)
-        const remote = pull?.ok ? pull?.doc : null;
         if (!pull?.ok && pull?.error !== "not-configured") { offlineNotice = true; setSyncState("error"); }
+        else setSyncState("online");
+        const remote = pull?.ok && pull?.doc && typeof pull.doc === "object" ? pull.doc : null;
         if (remote) {
           const remoteDoc = normalizeDoc(remote);
           const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), remoteDoc);
@@ -263,12 +259,10 @@ export default function App() {
           deletedRef.current = merged.deleted;
           docTs.current = merged.updatedAt;
           persistStores(fm, em);
-          setSyncState("online");
           // Se lo stato locale conteneva dati non ancora sul cloud, li riscrive subito.
           needsPush = docSignature(merged) !== docSignature(remoteDoc);
         } else if (!offlineNotice) {
           needsPush = Boolean(Object.keys(fm).length || Object.keys(em).length);
-          setSyncState("online");
         }
       }
 
