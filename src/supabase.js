@@ -64,19 +64,25 @@ export async function pullLibrary() {
   } catch (e) { console.error("Errore lettura Supabase:", e); return { ok: false, doc: null, error: String(e?.message || e) }; }
 }
 
-// Upsert immediato dell'intera libreria sulla riga condivisa.
+// Upsert dell'intera libreria sulla riga condivisa.
+// Coerenza: invia SEMPRE il payload completo (`data: doc`) — mai array vuoti/parziali.
+// Ritorna anche l'`updated_at` scritto, così il chiamante può allineare l'ultimo timestamp.
 export async function pushLibrary(doc) {
   if (!supabase) return { ok: false, error: "not-configured" };
+  if (!doc || typeof doc !== "object" || !Array.isArray(doc.franchises) || !Array.isArray(doc.entries)) {
+    return { ok: false, error: "invalid-doc" };
+  }
   try {
     await ensureSession();
+    const updatedAt = new Date().toISOString();
     const { error } = await supabase
       .from(TABLE)
       .upsert(
-        { id: SYNC_ID, data: doc, updated_at: new Date().toISOString() },
+        { id: SYNC_ID, data: doc, updated_at: updatedAt },
         { onConflict: "id" },
       );
     if (error) { console.error("Errore upsert Supabase:", error.message, error.details); return { ok: false, error: error.message, details: error.details }; }
-    return { ok: true };
+    return { ok: true, updatedAt };
   } catch (e) { console.error("Errore upsert Supabase:", e); return { ok: false, error: String(e?.message || e) }; }
 }
 

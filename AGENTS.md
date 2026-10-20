@@ -32,6 +32,14 @@ Start with `README.md` for local setup.
   tombstones (`deleted` map) and is clock-skew safe: it never gates the whole doc on a
   `Date.now()` comparison. `docSignature` detects real content changes so a device only
   re-pushes when it actually holds data the cloud lacks (prevents echo loops).
+- Optimistic local updates + Realtime debounce: every user mutation (`putEntry` etc.)
+  updates React state + IndexedDB immediately and sets `lastLocalEdit`; the cloud push is
+  coalesced by `PUSH_DEBOUNCE_MS` (1500 ms) and never fetches back after upsert.
+  `mergeRemote` ignores (a) the echo of our own last push (`lastPushedSig`), (b) any
+  Realtime event while a local edit happened within `LOCAL_EDIT_GRACE_MS` (3000 ms), and
+  (c) merges that don't change local state; only a strictly-newer doc from another device
+  replaces the UI. `pushLibrary` always upserts the whole `data` payload (guards
+  empty/partial docs).
 - AniList requests send `Authorization: Bearer $VITE_ANILIST_TOKEN` when set (higher rate
   limits); anonymous access still works without it.
 - Discovery search runs Jikan v4 REST (`/v4/anime?q=...&limit=15`, preflight-free GET)

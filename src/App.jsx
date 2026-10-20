@@ -8,7 +8,12 @@ const CACHE_TTL = 10 * 60 * 1000;
 const CACHE_MAX = 80;
 const SYNC_INTERVAL = 30 * 60 * 1000;
 const SYNC_CHECK = 5 * 60 * 1000;
-const PUSH_DEBOUNCE_MS = 250;
+// Debounce dell'invio cloud: raggruppa i tap ravvicinati (spunta episodi, note, ecc.)
+// in un unico upsert per evitare invii multipli continui.
+const PUSH_DEBOUNCE_MS = 1500;
+// Finestra di protezione: se una modifica locale è avvenuta da meno di questo tempo,
+// gli eventi Realtime in ingresso vengono ignorati per non sovrascrivere l'UI.
+const LOCAL_EDIT_GRACE_MS = 3000;
 const PART_STATE = { finished: "Uscito", airing: "In uscita", upcoming: "Prossimamente", unknown: "Data TBA" };
 const NO_TITLE = "Titolo non disponibile";
 
@@ -133,6 +138,10 @@ export default function App() {
   const deletedRef = useRef({});
   const pushTimer = useRef(null);
   const pushDirty = useRef(false);
+  // Timestamp (ms) dell'ultima modifica locale dell'utente: protegge da overwrite Realtime.
+  const lastLocalEdit = useRef(0);
+  // Firma dell'ultimo documento inviato: riconosce gli eventi Realtime "eco" (i propri).
+  const lastPushedSig = useRef("");
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -147,19 +156,24 @@ export default function App() {
     } catch (e) { console.warn("[idb] persist", e); }
   }, []);
 
-  // Upsert immediato (coalescato di ~250ms) dell'intera libreria sulla riga condivisa.
+  // Upsert immediato (coalescato) dell'intera libreria sulla riga condivisa.
   const flushPush = useCallback(async () => {
     if (!syncEnabled) return;
     clearTimeout(pushTimer.current);
     pushTimer.current = null;
     if (!pushDirty.current) return;
     pushDirty.current = false;
-    const ts = Date.now();
-    const doc = buildDoc(fRef.current, eRef.current, deletedRef.current, ts);
+    // Coerenza del payload: invia SEMPRE l'intero stato corrente (mai array vuoti/parziali).
+    const doc = buildDoc(fRef.current, eRef.current, deletedRef.current, Date.now());
+    if (!doc || !Array.isArray(doc.franchises) || !Array.isArray(doc.entries)) {
+      pushDirty.current = true;
+      return;
+    }
+    lastPushedSig.current = docSignature(doc);
     setSyncState("syncing");
     const r = await pushLibrary(doc);
     if (r.ok) {
-      docTs.current = Math.max(docTs.current, ts);
+      docTs.current = Math.max(docTs.current, doc.updatedAt);
       setSyncState("online");
       setLastSync(Date.now());
       db.meta.put({ key: "lastSync", value: Date.now() }).catch(() => {});
@@ -180,10 +194,29 @@ export default function App() {
   // dei dispositivi (niente confronto su Date.now tra PC e iPhone): usa solo il
   // last-write-wins per-item. Riscrive la riga condivisa solo se lo stato unito
   // contiene qualcosa che il remoto non ha ancora (convergenza + no loop di eco).
+  //
+  // Protezione anti-overwrite (Realtime):
+  //  - se l'evento è l'eco del nostro stesso ultimo push -> ignora;
+  //  - se una modifica locale è avvenuta negli ultimi LOCAL_EDIT_GRACE_MS -> ignora,
+  //    così l'UI non viene riportata indietro mentre l'utente sta toccando la scheda;
+  //  - altrimenti applica il merge SOLO se il risultato differisce dal locale (il
+  //    cloud porta davvero qualcosa di più recente da un altro dispositivo).
   const mergeRemote = useCallback((remoteDoc) => {
     const remote = normalizeDoc(remoteDoc);
+    // Eco del proprio push (stesso contenuto): non tocca lo stato locale.
+    if (lastPushedSig.current && docSignature(remote) === lastPushedSig.current) return;
+    // Finestra di grazia: una modifica locale molto recente ha priorità.
+    if (Date.now() - lastLocalEdit.current < LOCAL_EDIT_GRACE_MS) return;
+
     const local = buildDoc(fRef.current, eRef.current, deletedRef.current, 0);
     const merged = mergeDocs(local, remote);
+    const mergedSig = docSignature(merged);
+    const localSig = docSignature(local);
+    // Niente da applicare se il merge coincide col locale (il remoto non è più recente).
+    if (mergedSig === localSig) {
+      docTs.current = Math.max(docTs.current, merged.updatedAt);
+      return;
+    }
     const mapped = docToStores(merged);
     const stores = sanitizeStores(mapped.franchises, mapped.entries);
     deletedRef.current = merged.deleted;
@@ -194,7 +227,8 @@ export default function App() {
     setEntries({ ...stores.em });
     setLastSync(Date.now());
     persistStores(stores.fm, stores.em);
-    if (docSignature(merged) !== docSignature(remote)) schedulePush();
+    // Il locale conteneva dati che il remoto non ha: ritenta l'upsert con l'intero payload.
+    if (mergedSig !== docSignature(remote)) schedulePush();
   }, [persistStores, schedulePush]);
 
   const runSync = useCallback(async (auto) => {
@@ -384,6 +418,7 @@ export default function App() {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const putEntry = (fid, en) => {
+    lastLocalEdit.current = Date.now();
     const next = { ...en, updatedAt: Date.now() };
     eRef.current = { ...eRef.current, [fid]: next };
     setEntries({ ...eRef.current });
@@ -407,6 +442,7 @@ export default function App() {
   const reorderFranchise = useCallback((fid, neighborFid) => {
     const a = eRef.current[fid], b = eRef.current[neighborFid];
     if (!a || !b) return;
+    lastLocalEdit.current = Date.now();
     const now = Date.now();
     const na = { ...a, addedAt: Number(b.addedAt) || now, updatedAt: now };
     const nb = { ...b, addedAt: Number(a.addedAt) || now, updatedAt: now };
@@ -458,6 +494,7 @@ export default function App() {
   //    episodi spuntati, stagioni eliminate o ordine personalizzato.
   const addSelectedToWatchlist = useCallback(async (gr, selectedIds) => {
     if (!gr || addingRef.current) return;
+    lastLocalEdit.current = Date.now();
     const sel = new Set((selectedIds || []).filter(Boolean));
     if (!sel.size) { showToast("Nessun elemento selezionato"); return; }
     const members = (Array.isArray(gr.members) && gr.members.length ? gr.members : [gr.rep]).filter(Boolean);
@@ -564,6 +601,7 @@ export default function App() {
 
   const removeFromWatchlist = (fid) => {
     try {
+      lastLocalEdit.current = Date.now();
       genRef.current.set(fid, (genRef.current.get(fid) || 0) + 1);
       const nf = { ...fRef.current };
       const ne = { ...eRef.current };
