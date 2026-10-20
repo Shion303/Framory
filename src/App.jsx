@@ -142,6 +142,21 @@ export default function App() {
   const lastLocalEdit = useRef(0);
   // Firma dell'ultimo documento inviato: riconosce gli eventi Realtime "eco" (i propri).
   const lastPushedSig = useRef("");
+  // MUTEX locale: TRUE mentre una modifica dell'utente è in corso (fino a ~2s dopo l'upsert).
+  // Mentre è attivo, gli eventi Realtime in ingresso vengono ignorati completamente.
+  const isLocalUpdating = useRef(false);
+  const lockTimer = useRef(null);
+
+  // Blocca i sync in ingresso: chiamato all'inizio di ogni mutazione utente.
+  const lockLocalSync = () => {
+    isLocalUpdating.current = true;
+    if (lockTimer.current) { clearTimeout(lockTimer.current); lockTimer.current = null; }
+  };
+  // Rilascia il lock con un piccolo ritardo: chiamato dopo l'esito dell'upsert cloud.
+  const releaseLocalSync = () => {
+    if (lockTimer.current) clearTimeout(lockTimer.current);
+    lockTimer.current = setTimeout(() => { isLocalUpdating.current = false; lockTimer.current = null; }, 2000);
+  };
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -181,6 +196,8 @@ export default function App() {
       pushDirty.current = true;
       setSyncState("error");
     }
+    // Sblocca i sync in ingresso solo dopo l'esito dell'upsert (con ritardo).
+    releaseLocalSync();
   }, []);
 
   const schedulePush = useCallback(() => {
