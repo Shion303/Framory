@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, MoreVertical, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
@@ -518,8 +518,8 @@ export default function App() {
   // Lock dello scroll di sfondo quando una scheda/modale è aperta.
   const overlayOpen = Boolean(detailId || preview || settingsOpen);
   useEffect(() => {
-    document.body.style.overflow = overlayOpen ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
+    document.body.style.overflow = overlayOpen ? "hidden" : "unset";
+    return () => { document.body.style.overflow = "unset"; };
   }, [overlayOpen]);
 
   if (!ready) return <div className="min-h-screen bg-[#07070b] text-zinc-100 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-violet-300" /></div>;
@@ -531,7 +531,7 @@ export default function App() {
       {/* Large Title iOS: nessun box attorno al nome, sotto la safe area. */}
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 16px)" }}>
         <div className="flex items-baseline gap-2">
-          <h1 className="text-3xl font-bold tracking-tight">Framory</h1>
+          <h1 className="bg-gradient-to-r from-white to-slate-400 bg-clip-text text-3xl font-bold tracking-tight text-transparent">Framory</h1>
           {syncing && <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />}
         </div>
         <div className="flex items-center gap-2">
@@ -544,7 +544,7 @@ export default function App() {
         <ErrorBoundary resetKey={`${tab}|${search}`} onReset={() => { setGroups([]); setSearchError(false); }}>
           {tab === "home" && <HomeTab list={list} onOpen={setDetailId} onGoDiscovery={() => setTab("discovery")} />}
           {tab === "discovery" && <DiscoveryTab search={search} setSearch={onSearchChange} groups={groups} searching={searching} error={searchError} onRetry={retrySearch} onOpen={setPreview} />}
-          {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} onReorder={reorderFranchise} />}
+          {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} onReorder={reorderFranchise} onDelete={removeFromWatchlist} />}
         </ErrorBoundary>
       </main>
 
@@ -918,11 +918,21 @@ function SegmentControl({ value, onChange, options }) {
   );
 }
 
-function WatchlistTab({ list, onOpen, onReorder }) {
+function WatchlistTab({ list, onOpen, onReorder, onDelete }) {
   const [seg, setSeg] = useState("watching");
   const [drag, setDrag] = useState(null);
+  const [menuFid, setMenuFid] = useState(null);
+  const [confirmFid, setConfirmFid] = useState(null);
   if (!list.length) return <Empty icon={Bookmark} title="WatchList vuota" desc="Vai su Discovery e aggiungi il tuo primo titolo." />;
   const filtered = list.filter((x) => computeStatus(x.fr, x.en).key === seg);
+
+  // Sposta una scheda su/giù scambiando il suo addedAt con quello del vicino.
+  const move = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= filtered.length) return;
+    onReorder(filtered[i].fid, filtered[j].fid);
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-3">
       <div className="sticky top-0 z-20 -mx-3 bg-[#07070b]/85 px-3 pb-2 pt-1 backdrop-blur-xl">
@@ -934,29 +944,59 @@ function WatchlistTab({ list, onOpen, onReorder }) {
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {filtered.map((x, i) => {
             const s = computeStatus(x.fr, x.en);
+            const menuOpen = menuFid === x.fid;
             return (
               <div
                 key={x.fid}
                 draggable
                 onDragStart={() => setDrag(i)}
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={() => { if (drag !== null && drag !== i) onReorder(x.fid, filtered[drag].fid); setDrag(null); }}
-                className="group relative aspect-[2/3] w-full cursor-grab overflow-hidden rounded-2xl glass text-left shadow-lg shadow-black/30 transition-all duration-300 active:scale-[0.98]"
+                onDrop={() => { if (drag !== null && drag !== i) onReorder(filtered[drag].fid, x.fid); setDrag(null); }}
+                className="group relative aspect-[2/3] w-full overflow-hidden rounded-3xl glass text-left shadow-lg shadow-black/30 transition-all duration-300 active:scale-[0.98]"
               >
-                <button onClick={() => onOpen(x.fid)} className="absolute inset-0">
+                <button onClick={() => onOpen(x.fid)} className="absolute inset-0 transition-all duration-300 active:scale-95">
                   <Poster src={x.fr.cover} alt={x.fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
                 </button>
-                <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/10" />
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-2xl bg-gradient-to-t from-black/95 via-black/55 to-transparent px-2.5 pb-2.5 pt-10">
+                <div className="pointer-events-none absolute inset-0 rounded-3xl ring-1 ring-inset ring-white/10" />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-3xl bg-gradient-to-t from-black/95 via-black/55 to-transparent px-2.5 pb-2.5 pt-10">
                   <div className="line-clamp-1 text-xs font-medium">{x.fr.title}</div>
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className={`rounded-full border px-1.5 py-0.5 text-[9px] ${STATUS_STYLES[s.key]}`}>{s.label}</span>
                     <span className="text-[9px] text-zinc-400">{s.pct}%</span>
                   </div>
                 </div>
-                <div className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-black/40 backdrop-blur-xl">
-                  <GripVertical className="w-3.5 h-3.5 text-zinc-300" />
-                </div>
+
+                {/* Menu azioni scheda (3 pallini) */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuFid(menuOpen ? null : x.fid); }}
+                  aria-label="Azioni scheda"
+                  className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-slate-950/70 backdrop-blur-xl transition-all duration-300 active:scale-95"
+                >
+                  <MoreVertical className="w-4 h-4 text-zinc-200" />
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-1.5 top-10 z-10 w-40 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/90 shadow-xl shadow-black/50 backdrop-blur-2xl">
+                    <button onClick={() => { setMenuFid(null); move(i, -1); }} disabled={i === 0} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-all duration-300 disabled:opacity-40 active:bg-white/10">
+                      <ArrowUp className="w-3.5 h-3.5" />Sposta su
+                    </button>
+                    <button onClick={() => { setMenuFid(null); move(i, 1); }} disabled={i === filtered.length - 1} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-all duration-300 disabled:opacity-40 active:bg-white/10">
+                      <ArrowDown className="w-3.5 h-3.5" />Sposta giù
+                    </button>
+                    <button onClick={() => { setMenuFid(null); setConfirmFid(x.fid); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-300 transition-all duration-300 active:bg-red-500/15">
+                      <Trash2 className="w-3.5 h-3.5" />Elimina franchise
+                    </button>
+                  </div>
+                )}
+
+                {confirmFid === x.fid && (
+                  <div className="absolute inset-0 z-20 flex flex-col justify-end gap-2 rounded-3xl bg-slate-950/90 p-3 backdrop-blur-2xl">
+                    <div className="text-[11px] leading-snug text-red-200">Eliminare «{x.fr.title}» dalla WatchList?</div>
+                    <div className="flex gap-1.5">
+                      <button onClick={() => setConfirmFid(null)} className="flex-1 rounded-xl border border-white/10 bg-white/5 py-1.5 text-[11px] transition-all duration-300 active:scale-95">Annulla</button>
+                      <button onClick={() => { setConfirmFid(null); onDelete(x.fid); }} className="flex-1 rounded-xl bg-red-500 py-1.5 text-[11px] font-medium text-white transition-all duration-300 active:scale-95">Elimina</button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1001,13 +1041,16 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSe
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07070b]/92 backdrop-blur-2xl">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/95 backdrop-blur-2xl">
       <div className="min-h-full pb-24">
         <div className="relative h-44">
           <Poster src={fr.banner || fr.cover} alt={fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#07070b] via-[#07070b]/45 to-transparent" />
-          <button onClick={onClose} aria-label="Torna alla WatchList" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute left-3 flex items-center gap-1 rounded-2xl border border-white/10 bg-neutral-900/80 px-2.5 py-2 text-xs font-medium backdrop-blur-xl transition-all duration-300 ease-in-out active:scale-95">
-            <ChevronLeft className="w-4 h-4" />WatchList
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/45 to-transparent" />
+          <button onClick={onClose} aria-label="Torna alla WatchList" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute left-3 flex items-center gap-1.5 rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-xs font-medium backdrop-blur-xl transition-all duration-300 active:scale-95">
+            <ChevronLeft className="w-4 h-4" />Torna alla WatchList
+          </button>
+          <button onClick={() => setConfirmDel(true)} aria-label="Elimina franchise" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute right-3 flex h-9 w-9 items-center justify-center rounded-2xl border border-white/10 bg-white/10 backdrop-blur-xl transition-all duration-300 active:scale-95">
+            <Trash2 className="w-4 h-4 text-red-300" />
           </button>
           <div className="absolute bottom-3 left-3 right-3 flex items-end gap-3">
             <Poster src={fr.cover} alt={fr.title} className="w-16 shrink-0 aspect-[2/3] shadow-lg shadow-black/50" />
