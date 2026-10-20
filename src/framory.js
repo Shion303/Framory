@@ -687,6 +687,25 @@ function removePart(en, partId) {
   return { ...en, hiddenParts: [...hidden], checked, order };
 }
 
+// Autocompleta/azzera una parte: se tutti i suoi episodi sono spuntati li deseleziona,
+// altrimenti li spunta tutti. Se dopo l'operazione TUTTI gli episodi visibili risultano
+// completati imposta lo stato su "completed" (tranne se l'utente ha scelto "ongoing").
+// Ritorna l'entry aggiornata (nuovo oggetto).
+function togglePartChecked(fr, en, partId) {
+  const map = partItemsMap(fr, en);
+  const ids = (map[partId] || []).map((i) => i.id);
+  if (!ids.length) return en;
+  const set = new Set(en.checked || []);
+  const allDone = ids.every((id) => set.has(id));
+  if (allDone) for (const id of ids) set.delete(id);
+  else for (const id of ids) set.add(id);
+  const checked = [...set];
+  const all = activeItems(fr, { ...en, checked });
+  const everyDone = all.length > 0 && all.every((i) => checked.includes(i.id));
+  const status = everyDone && en.status !== "ongoing" ? "completed" : en.status;
+  return { ...en, checked, status };
+}
+
 const sortIds = (ids, order) => {
   if (!Array.isArray(order) || !order.length) return ids;
   const pos = new Map(order.map((id, i) => [id, i]));
@@ -1007,6 +1026,6 @@ export function docSignature(doc) {
 export {
   searchGroups, searchGroupsDetailed, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, STATUS_KEYS, migrateStatus,
   providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes, mergeFranchiseParts,
-  orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart,
+  orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart, togglePartChecked,
   titleKey, syncLibrary,
 };

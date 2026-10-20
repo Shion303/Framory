@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, MoreVertical, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, STATUS_KEYS, migrateStatus, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, mergeFranchiseParts, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
+import { AlertTriangle, ArrowDown, ArrowUp, Bookmark, Check, CheckCheck, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, MoreVertical, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
+import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, STATUS_KEYS, migrateStatus, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, mergeFranchiseParts, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart, togglePartChecked, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
@@ -397,6 +397,7 @@ export default function App() {
     return { ...en, checked: [...s] };
   });
   const removeItem = (fid, itemId) => patchEntry(fid, (en) => ({ ...en, removed: [...new Set([...(en.removed || []), itemId])] }));
+  const toggleSeason = (fid, partId) => patchEntry(fid, (en) => togglePartChecked(fRef.current[fid], en, partId));
   const setStatus = (fid, key) => patchEntry(fid, (en) => ({ ...en, status: STATUS_KEYS.includes(key) ? key : "planned" }));
   const setNotes = (fid, notes) => patchEntry(fid, (en) => ({ ...en, notes: text(notes) }));
   const reorderPart = (fid, from, to) => patchEntry(fid, (en) => reorderParts(fRef.current[fid], en, from, to));
@@ -652,7 +653,7 @@ export default function App() {
           onCheck={toggleCheck} onRemoveItem={removeItem}
           onSetStatus={setStatus} onSetNotes={setNotes}
           onReorderPart={reorderPart} onReorderItem={reorderItem}
-          onRemoveSeason={removeSeason}
+          onRemoveSeason={removeSeason} onToggleSeason={toggleSeason}
           onDelete={() => removeFromWatchlist(detailId)}
         />
       )}
@@ -663,6 +664,7 @@ export default function App() {
           justAdded={addedKey === preview.key} onClose={() => setPreview(null)}
           onRemove={removeFromWatchlist} onSetStatus={setStatus}
           onRemoveSeason={removeSeason} onAddSelected={addSelectedToWatchlist}
+          onToggleSeason={toggleSeason}
         />
       )}
       {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={importData} lastSync={lastSync} syncState={syncState} />}
@@ -902,7 +904,7 @@ function StatusPicker({ en, current, onSetStatus, compact }) {
   );
 }
 
-function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, onRemove, onSetStatus, onRemoveSeason, onAddSelected }) {
+function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, onRemove, onSetStatus, onRemoveSeason, onAddSelected, onToggleSeason }) {
   // Tutti gli elementi dall'API: quelli eliminati (hiddenParts) devono riapparire come mancanti.
   const parts = useMemo(() => previewParts(gr.members || []), [gr]);
   const total = parts.reduce((n, p) => n + (p.episodes || 0), 0);
@@ -916,6 +918,10 @@ function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, on
     for (const id of (existsFr?.memberIds || [])) if (!hidden.has(id)) set.add(id);
     return set;
   }, [existsFr, hidden]);
+
+  // Stato spunta degli episodi per stagione (solo per elementi già nella scheda).
+  const checkedSet = useMemo(() => new Set(existsEn?.checked || []), [existsEn]);
+  const itemMap = useMemo(() => (existsFr ? partItemsMap(existsFr, existsEn || {}) : {}), [existsFr, existsEn]);
 
   // Selezione iniziale smart:
   //  - non in WatchList -> tutti selezionati
@@ -982,6 +988,20 @@ function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, on
                     <span className="shrink-0 rounded-full border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] text-zinc-400">gia presente</span>
                   )}
                   <span className={`text-[10px] shrink-0 px-1.5 py-0.5 rounded-full border ${p.finished ? "border-emerald-400/40 text-emerald-300 bg-emerald-400/10" : p.status === "airing" ? "border-sky-400/40 text-sky-300 bg-sky-400/10" : "border-white/15 text-zinc-400"}`}>{PART_STATE[p.status] || "Data TBA"}</span>
+                  {exists && inCard && (() => {
+                    const ids = (itemMap[p.id] || []).map((i) => i.id);
+                    const allDone = ids.length > 0 && ids.every((id) => checkedSet.has(id));
+                    return (
+                      <button
+                        onClick={() => onToggleSeason(exists, p.id)}
+                        disabled={ids.length === 0}
+                        aria-label={allDone ? `Deseleziona tutti gli episodi di ${p.title}` : `Spunta tutti gli episodi di ${p.title}`}
+                        className="flex shrink-0 items-center gap-1 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-2 py-1.5 text-[10px] font-medium text-emerald-400 backdrop-blur-xl transition-all duration-300 hover:bg-emerald-500/20 active:scale-95 disabled:opacity-40"
+                      >
+                        <CheckCheck className="w-3 h-3" />{allDone ? "Deseleziona" : "Spunta tutti"}
+                      </button>
+                    );
+                  })()}
                   {exists && inCard && (
                     <button
                       onClick={() => onRemoveSeason(exists, p.id)}
@@ -1151,7 +1171,7 @@ function WatchlistTab({ list, onOpen, onReorder, onDelete }) {
   );
 }
 
-function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSetNotes, onReorderPart, onReorderItem, onRemoveSeason, onDelete }) {
+function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSetNotes, onReorderPart, onReorderItem, onRemoveSeason, onToggleSeason, onDelete }) {
   const [openId, setOpenId] = useState(() => (fr.parts || [])[0]?.id ?? null);
   const [drag, setDrag] = useState(null);
   const [touch, setTouch] = useState(null);
@@ -1268,6 +1288,18 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSe
                       <ChevronRight className={`w-4 h-4 shrink-0 text-zinc-600 transition-transform ${isOpen ? "rotate-90" : ""}`} />
                     </button>
                     <div className="flex items-center pr-2 cursor-grab"><GripVertical className="w-4 h-4 text-zinc-600" /></div>
+                    {(() => {
+                      const allDone = items.length > 0 && done === items.length;
+                      return (
+                        <button
+                          onClick={() => onToggleSeason(fid, p.id)}
+                          aria-label={allDone ? `Deseleziona tutti gli episodi di ${p.label}` : `Spunta tutti gli episodi di ${p.label}`}
+                          className="flex shrink-0 items-center gap-1 self-center rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-2 text-[11px] font-medium text-emerald-400 backdrop-blur-xl transition-all duration-300 hover:bg-emerald-500/20 active:scale-95"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />{allDone ? "Deseleziona" : "Spunta tutti"}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() => onRemoveSeason(fid, p.id)}
                       aria-label={`Elimina stagione ${p.label}`}

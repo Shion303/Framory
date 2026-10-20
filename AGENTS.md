@@ -71,4 +71,9 @@ Start with `README.md` for local setup.
   overrides (`checked`, `notes`, `hiddenParts`, `order`, `status`) and episode data are
   kept; `revived` lists re-added parts that were hidden — the app removes them from
   `entry.hiddenParts` (IndexedDB + cloud). Only the new parts get episode titles/thumbnails.
+- Each part header (Detail + Discovery when the item is already saved) has a green
+  "Spunta tutti" / "Deseleziona" `CheckCheck` button → `togglePartChecked(fr, en, partId)`:
+  checks every episode of that part, or clears them if all were already checked. If, after
+  the action, *every* visible episode is checked it sets `status: "completed"` (never
+  overrides a manual `ongoing`). Hidden parts are ignored when judging completion.
 - Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.
