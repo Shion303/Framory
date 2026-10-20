@@ -41,6 +41,7 @@ function sanitizeStores(franchises, entries) {
       ...r,
       franchiseId: fid,
       status: r.status ?? null,
+      notes: text(r.notes),
       checked: asList(r.checked).filter(Boolean),
       removed: asList(r.removed).filter(Boolean),
       order: asList(r.order).filter(Boolean),
@@ -391,8 +392,23 @@ export default function App() {
   });
   const removeItem = (fid, itemId) => patchEntry(fid, (en) => ({ ...en, removed: [...new Set([...(en.removed || []), itemId])] }));
   const setStatus = (fid, key) => patchEntry(fid, (en) => ({ ...en, status: key === "auto" ? null : key }));
+  const setNotes = (fid, notes) => patchEntry(fid, (en) => ({ ...en, notes: text(notes) }));
   const reorderPart = (fid, from, to) => patchEntry(fid, (en) => reorderParts(fRef.current[fid], en, from, to));
   const reorderItem = (fid, partId, from, to) => patchEntry(fid, (en) => reorderPartItems(fRef.current[fid], en, partId, from, to));
+
+  // Riordino dell'INTERO franchise nella WatchList (per addedAt, che è il criterio
+  // con cui `list` ordina). Scambia il valore addedAt tra fid e neighborFid.
+  const reorderFranchise = useCallback((fid, neighborFid) => {
+    const a = eRef.current[fid], b = eRef.current[neighborFid];
+    if (!a || !b) return;
+    const now = Date.now();
+    const na = { ...a, addedAt: Number(b.addedAt) || now, updatedAt: now };
+    const nb = { ...b, addedAt: Number(a.addedAt) || now, updatedAt: now };
+    eRef.current = { ...eRef.current, [fid]: na, [neighborFid]: nb };
+    setEntries({ ...eRef.current });
+    db.transaction("rw", db.entries, async () => { await db.entries.bulkPut([na, nb]); }).catch((e) => console.warn("[reorder] persist", e));
+    schedulePush();
+  }, [schedulePush]);
 
   const findExisting = useCallback((gr) => {
     if (!gr) return null;
@@ -499,32 +515,36 @@ export default function App() {
   );
   const previewFid = useMemo(() => findExisting(preview), [preview, franchises, findExisting]);
 
+  // Lock dello scroll di sfondo quando una scheda/modale è aperta.
+  const overlayOpen = Boolean(detailId || preview || settingsOpen);
+  useEffect(() => {
+    document.body.style.overflow = overlayOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [overlayOpen]);
+
   if (!ready) return <div className="min-h-screen bg-[#07070b] text-zinc-100 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-violet-300" /></div>;
 
   return (
     <div className="relative min-h-screen bg-[#07070b] text-zinc-100 overflow-x-hidden">
       <Ambient />
 
-      <header className="sticky top-0 z-30 px-3 pb-3" style={{ paddingTop: "calc(env(safe-area-inset-top) + 10px)" }}>
-        <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-full bg-gradient-to-b from-[#07070b] via-[#07070b]/85 to-transparent" />
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <div className="glass flex items-center gap-2 rounded-2xl px-3 py-2">
-            <Sparkles className="w-4 h-4 text-violet-300" />
-            <div className="text-sm font-semibold tracking-tight">Framory</div>
-            {syncing && <Loader2 className="w-3.5 h-3.5 animate-spin text-zinc-400" />}
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => runSync(false)} disabled={syncing} aria-label="Sincronizza" className="glass p-2.5 rounded-2xl disabled:opacity-60 active:scale-95 transition-transform">{syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}</button>
-            <button onClick={() => setSettingsOpen(true)} aria-label="Impostazioni" className="glass p-2.5 rounded-2xl active:scale-95 transition-transform"><Settings className="w-4 h-4" /></button>
-          </div>
+      {/* Large Title iOS: nessun box attorno al nome, sotto la safe area. */}
+      <div className="mx-auto flex max-w-5xl items-center justify-between px-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 16px)" }}>
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-3xl font-bold tracking-tight">Framory</h1>
+          {syncing && <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />}
         </div>
-      </header>
+        <div className="flex items-center gap-2">
+          <button onClick={() => runSync(false)} disabled={syncing} aria-label="Sincronizza" className="glass p-2.5 rounded-2xl transition-all duration-300 disabled:opacity-60 active:scale-95">{syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}</button>
+          <button onClick={() => setSettingsOpen(true)} aria-label="Impostazioni" className="glass p-2.5 rounded-2xl transition-all duration-300 active:scale-95"><Settings className="w-4 h-4" /></button>
+        </div>
+      </div>
 
-      <main className="pb-36">
+      <main className="pb-36 pt-4">
         <ErrorBoundary resetKey={`${tab}|${search}`} onReset={() => { setGroups([]); setSearchError(false); }}>
           {tab === "home" && <HomeTab list={list} onOpen={setDetailId} onGoDiscovery={() => setTab("discovery")} />}
           {tab === "discovery" && <DiscoveryTab search={search} setSearch={onSearchChange} groups={groups} searching={searching} error={searchError} onRetry={retrySearch} onOpen={setPreview} />}
-          {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} />}
+          {tab === "watchlist" && <WatchlistTab list={list} onOpen={setDetailId} onReorder={reorderFranchise} />}
         </ErrorBoundary>
       </main>
 
@@ -542,7 +562,8 @@ export default function App() {
           fr={franchises[detailId]} en={entries[detailId]} fid={detailId}
           onClose={() => setDetailId(null)}
           onCheck={toggleCheck} onRemoveItem={removeItem}
-          onSetStatus={setStatus} onReorderPart={reorderPart} onReorderItem={reorderItem}
+          onSetStatus={setStatus} onSetNotes={setNotes}
+          onReorderPart={reorderPart} onReorderItem={reorderItem}
           onDelete={() => removeFromWatchlist(detailId)}
         />
       )}
@@ -871,23 +892,25 @@ function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRem
   );
 }
 
-function WatchlistTab({ list, onOpen }) {
-  if (!list.length) return <Empty icon={Bookmark} title="WatchList vuota" desc="Vai su Discovery e aggiungi il tuo primo titolo." />;
+const WATCH_SEGMENTS = [
+  { k: "watching", label: "Sto Guardando" },
+  { k: "ongoing", label: "In Corso" },
+  { k: "completed", label: "Completata" },
+  { k: "hold", label: "In Pausa" },
+];
+
+function SegmentControl({ value, onChange, options }) {
   return (
-    <div className="mx-auto grid max-w-5xl grid-cols-2 gap-3 px-3 pt-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-      {list.map((x) => {
-        const s = computeStatus(x.fr, x.en);
+    <div className="flex gap-1 overflow-x-auto rounded-2xl border border-white/10 bg-neutral-900/80 p-1 backdrop-blur-xl">
+      {options.map((o) => {
+        const active = value === o.k;
         return (
-          <button key={x.fid} onClick={() => onOpen(x.fid)} className="group relative aspect-[2/3] w-full overflow-hidden rounded-2xl glass text-left shadow-lg shadow-black/30 transition-all duration-300 active:scale-[0.98]">
-            <Poster src={x.fr.cover} alt={x.fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
-            <div className="absolute inset-0 ring-1 ring-inset ring-white/10 rounded-2xl pointer-events-none" />
-            <div className="absolute inset-x-0 bottom-0 rounded-b-2xl bg-gradient-to-t from-black/95 via-black/55 to-transparent px-2.5 pb-2.5 pt-10">
-              <div className="line-clamp-1 text-xs font-medium">{x.fr.title}</div>
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className={`rounded-full border px-1.5 py-0.5 text-[9px] ${STATUS_STYLES[s.key]}`}>{s.label}</span>
-                <span className="text-[9px] text-zinc-400">{s.pct}%</span>
-              </div>
-            </div>
+          <button
+            key={o.k}
+            onClick={() => onChange(o.k)}
+            className={`shrink-0 whitespace-nowrap rounded-xl px-3 py-1.5 text-[11px] font-medium transition-all duration-300 ease-in-out active:scale-95 ${active ? "bg-white/15 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+          >
+            {o.label}
           </button>
         );
       })}
@@ -895,11 +918,60 @@ function WatchlistTab({ list, onOpen }) {
   );
 }
 
-function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onReorderPart, onReorderItem, onDelete }) {
+function WatchlistTab({ list, onOpen, onReorder }) {
+  const [seg, setSeg] = useState("watching");
+  const [drag, setDrag] = useState(null);
+  if (!list.length) return <Empty icon={Bookmark} title="WatchList vuota" desc="Vai su Discovery e aggiungi il tuo primo titolo." />;
+  const filtered = list.filter((x) => computeStatus(x.fr, x.en).key === seg);
+  return (
+    <div className="mx-auto max-w-5xl px-3">
+      <div className="sticky top-0 z-20 -mx-3 bg-[#07070b]/85 px-3 pb-2 pt-1 backdrop-blur-xl">
+        <SegmentControl value={seg} onChange={setSeg} options={WATCH_SEGMENTS} />
+      </div>
+      {!filtered.length ? (
+        <Empty icon={Search} title="Nessun titolo qui" desc="Non ci sono titoli in questa sezione." />
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {filtered.map((x, i) => {
+            const s = computeStatus(x.fr, x.en);
+            return (
+              <div
+                key={x.fid}
+                draggable
+                onDragStart={() => setDrag(i)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => { if (drag !== null && drag !== i) onReorder(x.fid, filtered[drag].fid); setDrag(null); }}
+                className="group relative aspect-[2/3] w-full cursor-grab overflow-hidden rounded-2xl glass text-left shadow-lg shadow-black/30 transition-all duration-300 active:scale-[0.98]"
+              >
+                <button onClick={() => onOpen(x.fid)} className="absolute inset-0">
+                  <Poster src={x.fr.cover} alt={x.fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
+                </button>
+                <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/10" />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-2xl bg-gradient-to-t from-black/95 via-black/55 to-transparent px-2.5 pb-2.5 pt-10">
+                  <div className="line-clamp-1 text-xs font-medium">{x.fr.title}</div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] ${STATUS_STYLES[s.key]}`}>{s.label}</span>
+                    <span className="text-[9px] text-zinc-400">{s.pct}%</span>
+                  </div>
+                </div>
+                <div className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-black/40 backdrop-blur-xl">
+                  <GripVertical className="w-3.5 h-3.5 text-zinc-300" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSetNotes, onReorderPart, onReorderItem, onDelete }) {
   const [openId, setOpenId] = useState(() => (fr.parts || [])[0]?.id ?? null);
   const [drag, setDrag] = useState(null);
   const [touch, setTouch] = useState(null);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [notes, setNotesLocal] = useState(() => text(en.notes));
   const parts = useMemo(() => orderedParts(fr, en), [fr, en]);
   const map = useMemo(() => partItemsMap(fr, en), [fr, en]);
   const checkedSet = useMemo(() => new Set(en.checked || []), [en.checked]);
@@ -909,6 +981,15 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
     const first = (fr.parts || [])[0]?.id ?? null;
     setOpenId((cur) => (cur && (fr.parts || []).some((p) => p.id === cur) ? cur : first));
   }, [fr.id, fr.parts]);
+
+  // Carica le note dal cloud/altri device solo se l'utente non sta scrivendo.
+  const notesDirty = useRef(false);
+  useEffect(() => { if (!notesDirty.current) setNotesLocal(text(en.notes)); }, [en.notes]);
+
+  const commitNotes = useCallback(() => {
+    notesDirty.current = false;
+    onSetNotes(fid, notes);
+  }, [onSetNotes, fid, notes]);
 
   const onTouchStart = (e) => { const t = e.touches[0]; setTouch({ x: t.clientX, y: t.clientY }); };
   const onTouchEnd = (e, id) => {
@@ -925,7 +1006,9 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
         <div className="relative h-44">
           <Poster src={fr.banner || fr.cover} alt={fr.title} rounded="rounded-none" className="absolute inset-0 w-full h-full" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#07070b] via-[#07070b]/45 to-transparent" />
-          <button onClick={onClose} aria-label="Indietro" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute left-3 rounded-2xl border border-white/15 bg-black/40 p-2.5 backdrop-blur-xl active:scale-95 transition"><ChevronLeft className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Torna alla WatchList" style={{ top: "calc(env(safe-area-inset-top) + 10px)" }} className="absolute left-3 flex items-center gap-1 rounded-2xl border border-white/10 bg-neutral-900/80 px-2.5 py-2 text-xs font-medium backdrop-blur-xl transition-all duration-300 ease-in-out active:scale-95">
+            <ChevronLeft className="w-4 h-4" />WatchList
+          </button>
           <div className="absolute bottom-3 left-3 right-3 flex items-end gap-3">
             <Poster src={fr.cover} alt={fr.title} className="w-16 shrink-0 aspect-[2/3] shadow-lg shadow-black/50" />
             <div className="flex-1 min-w-0 pb-0.5">
@@ -941,6 +1024,22 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
           <div className="mt-1.5 flex items-center gap-1.5">
             <span className={`text-[10px] px-2 py-0.5 rounded-full border ${STATUS_STYLES[s.key]}`}>{s.label}</span>
             {s.manual && <span className="text-[10px] text-zinc-500">impostato manualmente</span>}
+          </div>
+        </div>
+
+        <div className="px-3 mt-5">
+          <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1.5">Note</div>
+          <textarea
+            value={notes}
+            onChange={(e) => { notesDirty.current = true; setNotesLocal(e.target.value); }}
+            onBlur={commitNotes}
+            rows={3}
+            placeholder="Appunti personali: dove sei arrivato, ordine di visione, giudizio…"
+            className="w-full resize-y rounded-2xl border border-white/10 bg-neutral-900/80 p-3 text-[13px] leading-relaxed outline-none backdrop-blur-xl transition-all duration-300 placeholder:text-zinc-600 focus:border-violet-400/40"
+          />
+          <div className="mt-1.5 flex items-center justify-between">
+            <span className="text-[10px] text-zinc-500">Salvate automaticamente</span>
+            <button onClick={commitNotes} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] transition-all duration-300 active:scale-95">Salva nota</button>
           </div>
         </div>
 
@@ -968,7 +1067,7 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
                     onDrop={() => { if (drag && drag.type === "part") onReorderPart(fid, drag.from, pi); setDrag(null); }}
                     className="flex items-stretch"
                   >
-                    <button onClick={() => setOpenId(isOpen ? null : p.id)} aria-expanded={isOpen} className="flex-1 flex items-center gap-3 p-2 text-left active:bg-white/[0.03]">
+                    <button onClick={() => setOpenId(isOpen ? null : p.id)} aria-expanded={isOpen} className="flex-1 flex items-center gap-3 p-2 text-left transition-all duration-300 active:bg-white/[0.03]">
                       <Poster src={p.cover || fr.cover} alt={p.title} className="w-14 shrink-0 aspect-[2/3]" />
                       <div className="flex-1 min-w-0">
                         <div className="text-[13px] font-medium line-clamp-1">{p.label}</div>
@@ -1021,15 +1120,15 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onRe
 
         <div className="px-3 mt-6">
           {confirmDel ? (
-            <div className="rounded-2xl bg-red-500/10 border border-red-400/30 p-3">
+            <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-3 backdrop-blur-xl">
               <div className="text-sm text-red-200 mb-2">Rimuovere definitivamente tutta l'opera e i dati locali dalla WatchList?</div>
               <div className="flex gap-2">
-                <button onClick={() => setConfirmDel(false)} className="flex-1 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm">Annulla</button>
-                <button onClick={onDelete} className="flex-1 py-2 rounded-2xl bg-red-500 text-white text-sm font-medium">Rimuovi</button>
+                <button onClick={() => setConfirmDel(false)} className="flex-1 rounded-2xl border border-white/10 bg-white/5 py-2 text-sm transition-all duration-300 active:scale-95">Annulla</button>
+                <button onClick={onDelete} className="flex-1 rounded-2xl bg-red-500 py-2 text-sm font-medium text-white transition-all duration-300 active:scale-95">Rimuovi</button>
               </div>
             </div>
           ) : (
-            <button onClick={() => setConfirmDel(true)} className="w-full py-2.5 rounded-2xl bg-white/5 border border-white/10 text-sm text-red-300 flex items-center justify-center gap-2">
+            <button onClick={() => setConfirmDel(true)} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-2.5 text-sm text-red-300 transition-all duration-300 active:scale-95">
               <Trash2 className="w-4 h-4" />Rimuovi dalla WatchList
             </button>
           )}

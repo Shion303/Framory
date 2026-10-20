@@ -637,7 +637,7 @@ function optimisticFranchise(medias, title, exp) {
   return fr;
 }
 
-const defaultEntry = (id) => ({ franchiseId: id, status: null, checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
+const defaultEntry = (id) => ({ franchiseId: id, status: null, notes: "", checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
 
 function orderedParts(fr, en) {
   const parts = (fr.parts || []).slice();

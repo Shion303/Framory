@@ -41,6 +41,7 @@ Start with `README.md` for local setup.
   throws. Keep TMDB out of the anime flow.
 - Episode titles/thumbnails come from AniList `Media.streamingEpisodes` (Crunchyroll); Jikan provides titles when AniList has none.
 - Catalog sync (`syncLibrary`) enriches franchises but must never overwrite user overrides
-  (`checked`, `removed`, `order`, `partOrder`, `status`) in `entries`. Cloud sync *does*
-  propagate those overrides between the user's own devices.
+  (`checked`, `removed`, `order`, `partOrder`, `status`, `notes`) in `entries`. Cloud sync
+  *does* propagate those overrides between the user's own devices. Personal per-series
+  `notes` live on the entry and travel in the same JSON payload.
 - Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.
