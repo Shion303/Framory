@@ -637,7 +637,7 @@ function optimisticFranchise(medias, title, exp) {
   return fr;
 }
 
-const defaultEntry = (id) => ({ franchiseId: id, status: null, notes: "", checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
+const defaultEntry = (id) => ({ franchiseId: id, status: "planned", notes: "", checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
 
 function orderedParts(fr, en) {
   const parts = (fr.parts || []).slice();
@@ -707,23 +707,39 @@ function reorderPartItems(fr, en, partId, from, to) {
   return { ...en, order: rebuilt };
 }
 
-const MANUAL_STATUS = { watching: "Sto Guardando", ongoing: "In Corso", completed: "Completata", hold: "In Pausa / Pianificato" };
+// Stati UFFICIALI ed ESCLUSIVI. Nessun altro stato è ammesso.
+//  - planned   : Pianificato (default all'aggiunta da Discovery)
+//  - watching  : Sto guardando (primo episodio spuntato, visione in corso)
+//  - completed : Completata (100% e opera terminata)
+//  - ongoing   : In corso (100% ma attende nuove stagioni future) — SOLO manuale
+const MANUAL_STATUS = { planned: "Pianificato", watching: "Sto guardando", completed: "Completata", ongoing: "In corso" };
+const STATUS_KEYS = ["planned", "watching", "completed", "ongoing"];
+
+// Migrazione dei vecchi stati -> "Pianificato" (planned).
+const LEGACY_STATUS = { hold: "planned", paused: "planned", plan: "planned", planning: "planned", "plan to watch": "planned", auto: null, "": null, null: null, undefined: null, "in pausa": "planned", "in pausa / pianificato": "planned", "da iniziare": "planned", watching: "watching", "sto guardando": "watching", completed: "completed", "completata": "completed", ongoing: "ongoing", "in corso": "ongoing" };
+function migrateStatus(raw) {
+  if (raw == null) return null;
+  const k = String(raw).trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(LEGACY_STATUS, k)) return LEGACY_STATUS[k];
+  return STATUS_KEYS.includes(k) ? k : "planned";
+}
 
 function computeStatus(fr, en) {
   const items = activeItems(fr, en);
   const total = items.length;
   const done = items.filter((i) => (en.checked || []).includes(i.id)).length;
   const pct = total ? Math.round((done / total) * 100) : 0;
-  if (MANUAL_STATUS[en.status]) return { key: en.status, label: MANUAL_STATUS[en.status], pct, done, total, manual: true };
-  if (en.paused) return { key: "hold", label: "In Pausa", pct, done, total, manual: false };
-  if (done === 0) return { key: "planned", label: "Da iniziare", pct, done, total, manual: false };
+  const manual = migrateStatus(en.status);
+  // "In corso" è manuale e non deriva mai da AniList.
+  if (manual) return { key: manual, label: MANUAL_STATUS[manual], pct, done, total, manual: true };
+  if (done === 0) return { key: "planned", label: MANUAL_STATUS.planned, pct, done, total, manual: false };
   if (total && done === total) {
-    if (fr.finished) return { key: "completed", label: "Completata", pct, done, total, manual: false };
-    return { key: "ongoing", label: "In Corso", pct, done, total, manual: false };
+    if (fr.finished) return { key: "completed", label: MANUAL_STATUS.completed, pct, done, total, manual: false };
+    return { key: "watching", label: MANUAL_STATUS.watching, pct, done, total, manual: false };
   }
-  return { key: "watching", label: "Sto Guardando", pct, done, total, manual: false };
+  return { key: "watching", label: MANUAL_STATUS.watching, pct, done, total, manual: false };
 }
-const STATUS_STYLES = { ongoing: "text-emerald-300 border-emerald-400/40 bg-emerald-400/10", completed: "text-violet-300 border-violet-400/40 bg-violet-400/10", watching: "text-sky-300 border-sky-400/40 bg-sky-400/10", hold: "text-amber-300 border-amber-400/40 bg-amber-400/10", planned: "text-zinc-300 border-white/20 bg-white/5" };
+const STATUS_STYLES = { ongoing: "text-emerald-300 border-emerald-400/40 bg-emerald-400/10", completed: "text-violet-300 border-violet-400/40 bg-violet-400/10", watching: "text-sky-300 border-sky-400/40 bg-sky-400/10", planned: "text-zinc-300 border-white/20 bg-white/5" };
 
 function mediaFromPart(p) {
   if (p.media) return p.media;
@@ -951,7 +967,7 @@ export function docSignature(doc) {
 }
 
 export {
-  searchGroups, searchGroupsDetailed, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS,
+  searchGroups, searchGroupsDetailed, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, STATUS_KEYS, migrateStatus,
   providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
   orderedParts, partItemsMap, reorderParts, reorderPartItems,
   titleKey, syncLibrary,

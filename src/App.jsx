@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, MoreVertical, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
+import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, STATUS_KEYS, migrateStatus, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
@@ -21,6 +21,7 @@ const asList = (x) => (Array.isArray(x) ? x : x && typeof x === "object" ? Objec
 // array sempre definiti, titolo sempre stringa. Non lancia mai eccezioni.
 function sanitizeStores(franchises, entries) {
   const fm = {}, em = {};
+  let migrated = false;
   for (const r of asList(franchises)) {
     if (!r || typeof r !== "object") continue;
     const id = r.id || r.fid || null;
@@ -37,10 +38,12 @@ function sanitizeStores(franchises, entries) {
     if (!r || typeof r !== "object") continue;
     const fid = r.franchiseId || r.id || null;
     if (!fid) continue;
+    const status = r.paused ? "planned" : migrateStatus(r.status);
+    if (status !== (r.status ?? null)) migrated = true;
     em[fid] = {
       ...r,
       franchiseId: fid,
-      status: r.status ?? null,
+      status,
       notes: text(r.notes),
       checked: asList(r.checked).filter(Boolean),
       removed: asList(r.removed).filter(Boolean),
@@ -50,7 +53,7 @@ function sanitizeStores(franchises, entries) {
       updatedAt: Number(r.updatedAt) || Date.now(),
     };
   }
-  return { fm, em };
+  return { fm, em, migrated };
 }
 
 function normalizeMedia(item) {
@@ -227,13 +230,14 @@ export default function App() {
     (async () => {
       // --- 1) IndexedDB: nessuna eccezione può far crollare il render ---
       let fm = {}, em = {}, ls = null;
+      let migratedLocal = false;
       try {
         const [fr, er, lsr] = await db.transaction("r", db.franchises, db.entries, db.meta, () =>
           Promise.all([db.franchises.toArray(), db.entries.toArray(), db.meta.get("lastSync")]),
         );
         const local = sanitizeStores(fr, er);
-        fm = local.fm; em = local.em;
-        ls = lsr?.value || null;
+        fm = local.fm; em = local.em; ls = lsr?.value || null;
+        migratedLocal = local.migrated;
       } catch (e) {
         console.error("[load] indexeddb", e);
         fm = {}; em = {};
@@ -266,6 +270,7 @@ export default function App() {
           needsPush = Boolean(Object.keys(fm).length || Object.keys(em).length);
         }
       }
+      if (migratedLocal) { needsPush = true; persistStores(fm, em); }
 
       fRef.current = fm;
       eRef.current = em;
@@ -391,7 +396,7 @@ export default function App() {
     return { ...en, checked: [...s] };
   });
   const removeItem = (fid, itemId) => patchEntry(fid, (en) => ({ ...en, removed: [...new Set([...(en.removed || []), itemId])] }));
-  const setStatus = (fid, key) => patchEntry(fid, (en) => ({ ...en, status: key === "auto" ? null : key }));
+  const setStatus = (fid, key) => patchEntry(fid, (en) => ({ ...en, status: STATUS_KEYS.includes(key) ? key : "planned" }));
   const setNotes = (fid, notes) => patchEntry(fid, (en) => ({ ...en, notes: text(notes) }));
   const reorderPart = (fid, from, to) => patchEntry(fid, (en) => reorderParts(fRef.current[fid], en, from, to));
   const reorderItem = (fid, partId, from, to) => patchEntry(fid, (en) => reorderPartItems(fRef.current[fid], en, partId, from, to));
@@ -467,7 +472,7 @@ export default function App() {
       setEntries({ ...eRef.current });
       setAddedKey(gr.key);
       setPreview(null);
-      showToast("Aggiunto alla WatchList");
+      showToast("Aggiunto a Pianificato");
 
       db.transaction("rw", db.franchises, db.entries, async () => {
         await db.franchises.put(fr);
@@ -658,7 +663,7 @@ function Empty({ icon: Icon, title, desc, action }) {
 }
 
 function HomeTab({ list, onOpen, onGoDiscovery }) {
-  const watching = list.filter((x) => { const s = computeStatus(x.fr, x.en); return s.key === "watching" || s.key === "ongoing" || s.key === "completed"; });
+  const watching = list.filter((x) => { const s = computeStatus(x.fr, x.en); return s.key === "watching" || s.key === "ongoing"; });
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-5 px-3 pt-4">
       <section>
@@ -786,30 +791,27 @@ function DiscoveryCard({ gr, onOpen }) {
   );
 }
 
+// Stati ufficiali ed esclusivi (nessun altro stato ammesso).
 const STATUS_OPTIONS = [
-  { k: "auto", label: "Automatico" },
-  { k: "watching", label: "Sto Guardando" },
-  { k: "ongoing", label: "In Corso" },
+  { k: "planned", label: "Pianificato" },
+  { k: "watching", label: "Sto guardando" },
   { k: "completed", label: "Completata" },
-  { k: "hold", label: "In Pausa / Pianificato" },
+  { k: "ongoing", label: "In corso" },
 ];
 
-function StatusPicker({ en, onSetStatus, compact }) {
-  const current = en?.status && MANUAL_STATUS[en.status] ? en.status : "auto";
+function StatusPicker({ en, current, onSetStatus, compact }) {
+  const active = STATUS_KEYS.includes(current) ? current : migrateStatus(en?.status) || "planned";
   return (
     <div className={`flex gap-1.5 overflow-x-auto pb-0.5 ${compact ? "" : "-mx-1 px-1"}`}>
-      {STATUS_OPTIONS.map((o) => {
-        const active = current === o.k;
-        return (
-          <button
-            key={o.k}
-            onClick={() => onSetStatus(o.k)}
-            className={`shrink-0 px-2.5 py-1.5 rounded-full border text-[11px] whitespace-nowrap transition ${active ? STATUS_STYLES[o.k] || "bg-violet-500 text-white border-violet-400" : "border-white/10 bg-white/[0.04] text-zinc-400"}`}
-          >
-            {o.label}
-          </button>
-        );
-      })}
+      {STATUS_OPTIONS.map((o) => (
+        <button
+          key={o.k}
+          onClick={() => onSetStatus(o.k)}
+          className={`shrink-0 rounded-full border px-2.5 py-1.5 text-[11px] whitespace-nowrap transition-all duration-300 active:scale-95 ${active === o.k ? STATUS_STYLES[o.k] || "border-violet-400 bg-violet-500 text-white" : "border-white/10 bg-white/[0.04] text-zinc-400"}`}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -872,7 +874,7 @@ function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRem
         {exists && existsEn && (
           <div className="px-4 mt-4">
             <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">Stato</div>
-            <StatusPicker en={existsEn} onSetStatus={(k) => onSetStatus(exists, k)} />
+            <StatusPicker en={existsEn} current={migrateStatus(existsEn.status) || "planned"} onSetStatus={(k) => onSetStatus(exists, k)} />
           </div>
         )}
 
@@ -893,10 +895,10 @@ function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRem
 }
 
 const WATCH_SEGMENTS = [
-  { k: "watching", label: "Sto Guardando" },
-  { k: "ongoing", label: "In Corso" },
+  { k: "planned", label: "Pianificato" },
+  { k: "watching", label: "Sto guardando" },
   { k: "completed", label: "Completata" },
-  { k: "hold", label: "In Pausa" },
+  { k: "ongoing", label: "In corso" },
 ];
 
 function SegmentControl({ value, onChange, options }) {
@@ -919,7 +921,7 @@ function SegmentControl({ value, onChange, options }) {
 }
 
 function WatchlistTab({ list, onOpen, onReorder, onDelete }) {
-  const [seg, setSeg] = useState("watching");
+  const [seg, setSeg] = useState("planned");
   const [drag, setDrag] = useState(null);
   const [menuFid, setMenuFid] = useState(null);
   const [confirmFid, setConfirmFid] = useState(null);
@@ -1063,7 +1065,7 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSe
 
         <div className="px-3 mt-3">
           <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1.5">Stato</div>
-          <StatusPicker en={en} onSetStatus={(k) => onSetStatus(fid, k)} compact />
+          <StatusPicker en={en} current={s.key} onSetStatus={(k) => onSetStatus(fid, k)} compact />
           <div className="mt-1.5 flex items-center gap-1.5">
             <span className={`text-[10px] px-2 py-0.5 rounded-full border ${STATUS_STYLES[s.key]}`}>{s.label}</span>
             {s.manual && <span className="text-[10px] text-zinc-500">impostato manualmente</span>}

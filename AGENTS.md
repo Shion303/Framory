@@ -40,6 +40,17 @@ Start with `README.md` for local setup.
   errored (drives the retry affordance); `searchGroups` always returns an array and never
   throws. Keep TMDB out of the anime flow.
 - Episode titles/thumbnails come from AniList `Media.streamingEpisodes` (Crunchyroll); Jikan provides titles when AniList has none.
+- Watchlist status is a closed set of exactly 4 official states (no others are allowed):
+  `planned` "Pianificato" (default on add), `watching` "Sto guardando" (first episode
+  checked / partial progress), `completed` "Completata" (100% and franchise finished),
+  `ongoing` "In corso" (100% but awaiting future seasons — **manual only, never auto /
+  never from AniList**). `defaultEntry` seeds `status: "planned"`; `computeStatus` returns
+  `watching` (not `ongoing`) when a non-finished franchise is 100%. `migrateStatus`
+  converts any legacy value (`hold`, `paused`, `Plan to Watch`, unknown…) to `planned`;
+  `sanitizeStores` applies it on load/merge and reports `migrated` so the app re-pushes to
+  cloud. UI: `WATCH_SEGMENTS` + `STATUS_OPTIONS` use the 4 exact labels; add toast is
+  "Aggiunto a Pianificato"; status is editable from both the Detail modal and the
+  per-card quick `StatusPicker`.
 - Catalog sync (`syncLibrary`) enriches franchises but must never overwrite user overrides
   (`checked`, `removed`, `order`, `partOrder`, `status`, `notes`) in `entries`. Cloud sync
   *does* propagate those overrides between the user's own devices. Personal per-series
