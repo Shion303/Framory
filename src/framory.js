@@ -623,13 +623,17 @@ function buildFranchise(medias, title, exp) {
 }
 function previewParts(medias) { return planParts(medias); }
 
-// Merge sicuro: accoda SOLO le nuove parti (newMembers) a una scheda esistente
-// senza sovrascrivere alcun dato utente (episodi caricati, stato, ecc.).
-// Ritorna { franchise, added } dove `added` e il numero di parti realmente nuove.
-function mergeFranchiseParts(oldFr, newMembers) {
+// Merge sicuro: accoda le nuove parti (newMembers) a una scheda esistente e
+// "recupera" quelle selezionate che erano state eliminate (hiddenIds), senza
+// sovrascrivere alcun dato utente (episodi caricati, stato, note, ordine).
+// Ritorna { franchise, added, revived }.
+function mergeFranchiseParts(oldFr, newMembers, hiddenIds) {
+  const hidden = new Set(hiddenIds || []);
   const known = new Set((oldFr?.parts || []).map((p) => p.id).concat(oldFr?.memberIds || []));
-  const fresh = (newMembers || []).filter((m) => m && !known.has(m.id));
-  if (!fresh.length) return { franchise: oldFr, added: 0 };
+  const sel = (newMembers || []).filter(Boolean);
+  const fresh = sel.filter((m) => !known.has(m.id));
+  const revived = sel.filter((m) => known.has(m.id) && hidden.has(m.id)).map((m) => m.id);
+  if (!fresh.length && !revived.length) return { franchise: oldFr, added: 0, revived: [] };
   const allMedia = [...(oldFr.parts || []).map((p) => p.media).filter(Boolean), ...fresh];
   const rebuilt = buildFranchise(allMedia, oldFr.title, oldFr.id);
   const prevByPart = new Map((oldFr.parts || []).map((p) => [p.id, p]));
@@ -644,7 +648,7 @@ function mergeFranchiseParts(oldFr, newMembers) {
     status: allFinished ? "finished" : "airing", finished: allFinished,
     updatedAt: Date.now(),
   };
-  return { franchise, added: fresh.length };
+  return { franchise, added: fresh.length, revived };
 }
 
 function optimisticFranchise(medias, title, exp) {

@@ -468,38 +468,53 @@ export default function App() {
     if (existing) {
       const oldFr = fRef.current[existing];
       if (!oldFr) { showToast("Scheda non trovata"); return; }
-      const known = new Set((oldFr.parts || []).map((p) => p.id).concat(oldFr.memberIds || []));
-      const newMembers = members.filter((m) => sel.has(m.id) && !known.has(m.id));
-      if (!newMembers.length) { showToast("Nessun nuovo elemento da aggiungere"); setPreview(null); return; }
+      const oldEn = eRef.current[existing] || defaultEntry(existing);
+      const hiddenIds = oldEn.hiddenParts || [];
+      const selectedMembers = members.filter((m) => sel.has(m.id));
       addingRef.current = true;
       try {
         // Ricostruisce l'intera opera (media vecchi + nuovi) per ordine/label corretti,
         // poi ripristina i dati delle parti gia esistenti (episodi, epoche ecc.).
+        // `revived` = parti selezionate che erano state eliminate (hiddenParts).
         const prevByPart = new Map((oldFr.parts || []).map((p) => [p.id, p]));
-        const { franchise: nf, added } = mergeFranchiseParts(oldFr, newMembers);
-        if (!added || !nf) { showToast("Nessun nuovo elemento da aggiungere"); setPreview(null); return; }
+        const { franchise: nf, added, revived } = mergeFranchiseParts(oldFr, selectedMembers, hiddenIds);
+        if (!nf || (!added && !revived.length)) { showToast("Nessun nuovo elemento da aggiungere"); setPreview(null); return; }
+
+        // Riabilita le parti recuperate rimuovendole dagli override di eliminazione.
+        let ne = oldEn;
+        if (revived.length) {
+          const revive = new Set(revived);
+          ne = { ...oldEn, hiddenParts: (oldEn.hiddenParts || []).filter((id) => !revive.has(id)), updatedAt: Date.now() };
+          eRef.current = { ...eRef.current, [existing]: ne };
+          setEntries({ ...eRef.current });
+          db.entries.put(ne).catch((e) => console.warn("[revive] persist", e));
+        }
+
         fRef.current = { ...fRef.current, [existing]: nf };
         setFranchises({ ...fRef.current });
         setAddedKey(gr.key);
         setPreview(null);
-        showToast(`${added} elementi aggiunti`);
+        const parts = [added ? `${added} nuovi` : "", revived.length ? `${revived.length} recuperati` : ""].filter(Boolean).join(" e ");
+        showToast(`${parts || "0"} elementi aggiunti`);
         db.franchises.put(nf).catch((e) => console.warn("[merge] persist", e));
         schedulePush();
 
         // Carica titoli/immagini delle sole NUOVE parti, senza toccare gli override utente.
         const freshParts = nf.parts.filter((p) => !prevByPart.has(p.id));
-        const dbg = genRef.current.get(existing) || 0;
-        genRef.current.set(existing, dbg + 1);
-        const gen = genRef.current.get(existing);
-        await loadAllEpisodes(freshParts);
-        if (gen !== genRef.current.get(existing) || !fRef.current[existing]) return;
-        const cur = fRef.current[existing];
-        const byId = new Map(freshParts.map((p) => [p.id, p]));
-        const withEps = { ...cur, parts: cur.parts.map((p) => byId.get(p.id) || p), updatedAt: Date.now() };
-        fRef.current = { ...fRef.current, [existing]: withEps };
-        setFranchises({ ...fRef.current });
-        db.franchises.put(withEps).catch(() => {});
-        schedulePush();
+        if (freshParts.length) {
+          const dbg = genRef.current.get(existing) || 0;
+          genRef.current.set(existing, dbg + 1);
+          const gen = genRef.current.get(existing);
+          await loadAllEpisodes(freshParts);
+          if (gen !== genRef.current.get(existing) || !fRef.current[existing]) return;
+          const cur = fRef.current[existing];
+          const byId = new Map(freshParts.map((p) => [p.id, p]));
+          const withEps = { ...cur, parts: cur.parts.map((p) => byId.get(p.id) || p), updatedAt: Date.now() };
+          fRef.current = { ...fRef.current, [existing]: withEps };
+          setFranchises({ ...fRef.current });
+          db.franchises.put(withEps).catch(() => {});
+          schedulePush();
+        }
       } catch (e) {
         console.warn("[merge]", e);
         showToast("Errore aggiunta");
@@ -888,21 +903,23 @@ function StatusPicker({ en, current, onSetStatus, compact }) {
 }
 
 function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, onRemove, onSetStatus, onRemoveSeason, onAddSelected }) {
-  const hidden = useMemo(() => new Set(existsEn?.hiddenParts || []), [existsEn]);
-  const parts = useMemo(() => previewParts(gr.members || []).filter((p) => !hidden.has(p.id)), [gr, hidden]);
+  // Tutti gli elementi dall'API: quelli eliminati (hiddenParts) devono riapparire come mancanti.
+  const parts = useMemo(() => previewParts(gr.members || []), [gr]);
   const total = parts.reduce((n, p) => n + (p.episodes || 0), 0);
 
-  // Elementi gia presenti nella scheda salvata (per non sovrascriverli).
+  // Elementi EFFETTIVAMENTE presenti nella scheda: presenti nel franchise E non eliminati.
+  // Un OVA/stagione eliminato (hiddenParts) NON è "presente" -> riappare come nuovo/mancante.
+  const hidden = useMemo(() => new Set(existsEn?.hiddenParts || []), [existsEn]);
   const knownIds = useMemo(() => {
     const set = new Set();
-    for (const p of (existsFr?.parts || [])) set.add(p.id);
-    for (const id of (existsFr?.memberIds || [])) set.add(id);
+    for (const p of (existsFr?.parts || [])) if (!hidden.has(p.id)) set.add(p.id);
+    for (const id of (existsFr?.memberIds || [])) if (!hidden.has(id)) set.add(id);
     return set;
-  }, [existsFr]);
+  }, [existsFr, hidden]);
 
   // Selezione iniziale smart:
   //  - non in WatchList -> tutti selezionati
-  //  - gia presente      -> solo i nuovi / mancanti selezionati
+  //  - gia presente      -> solo i nuovi / mancanti (inclusi i recuperati) selezionati
   const [selected, setSelected] = useState(() => new Set(parts.filter((p) => !exists || !knownIds.has(p.id)).map((p) => p.id)));
   useEffect(() => {
     setSelected(new Set(parts.filter((p) => !exists || !knownIds.has(p.id)).map((p) => p.id)));

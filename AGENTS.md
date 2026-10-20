@@ -62,9 +62,13 @@ Start with `README.md` for local setup.
 - Discovery selection is smart: opening a series not in the WatchList pre-selects every
   part and the CTA is "Aggiungi a Pianificato"; if it is already in the WatchList only the
   new/missing parts are pre-selected and the CTA is "Aggiungi elementi selezionati". Users
-  can toggle any part. `addSelectedToWatchlist` never overwrites an existing card: for an
-  existing series it calls `mergeFranchiseParts(oldFr, newMembers)` which rebuilds the
+  can toggle any part. "Present" parts are computed against the *effective* saved card:
+  `knownIds` excludes `hiddenParts`, so an OVA/season the user deleted reappears in
+  Discovery as new/missing (checkbox selectable) instead of being filtered out.
+  `addSelectedToWatchlist` never overwrites an existing card: for an existing series it
+  calls `mergeFranchiseParts(oldFr, selectedMembers, hiddenIds)`, which rebuilds the
   franchise (correct order/labels) but restores the existing part objects, so user
   overrides (`checked`, `notes`, `hiddenParts`, `order`, `status`) and episode data are
-  kept; only the new parts get their episode titles/thumbnails loaded.
+  kept; `revived` lists re-added parts that were hidden — the app removes them from
+  `entry.hiddenParts` (IndexedDB + cloud). Only the new parts get episode titles/thumbnails.
 - Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.
