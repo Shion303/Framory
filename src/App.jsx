@@ -296,30 +296,34 @@ export default function App() {
       }
       if (cancelled) return;
 
-      // --- 2) Cloud: se il pull fallisce si continua OFFLINE con i dati locali ---
+      // --- 2) Cloud: la WatchList locale e' la fonte di verita'. Il cloud serve SOLO a
+      //     inizializzare un dispositivo NUOVO e a pubblicare (push) le modifiche locali.
+      //     Non ripristiniamo MAI anime/stagioni/spunte dal cloud: niente overwrite o reset.
       let needsPush = false;
       let offlineNotice = false;
       if (syncEnabled) {
         setSyncState("connecting");
-        // Lettura iniziale sulla riga globale condivisa id = SYNC_ID ("global_user_watchlist").
         const pull = await pullLibrary();
         if (cancelled) return;
         if (!pull?.ok && pull?.error !== "not-configured") { offlineNotice = true; setSyncState("error"); }
         else setSyncState("online");
         const remote = pull?.ok && pull?.doc && typeof pull.doc === "object" ? pull.doc : null;
-        if (remote) {
+        const localEmpty = !Object.keys(fm).length && !Object.keys(em).length;
+        if (remote && localEmpty) {
+          // Dispositivo nuovo: adotta una volta sola la libreria cloud esistente.
           const remoteDoc = normalizeDoc(remote);
-          const merged = mergeDocs(buildDoc(fm, em, deletedRef.current, 0), remoteDoc);
-          const mapped = docToStores(merged);
+          const mapped = docToStores(remoteDoc);
           const stores = sanitizeStores(mapped.franchises, mapped.entries);
           fm = stores.fm; em = stores.em;
-          deletedRef.current = merged.deleted;
-          docTs.current = merged.updatedAt;
+          deletedRef.current = remoteDoc.deleted;
+          docTs.current = remoteDoc.updatedAt;
           persistStores(fm, em);
-          // Se lo stato locale conteneva dati non ancora sul cloud, li riscrive subito.
-          needsPush = docSignature(merged) !== docSignature(remoteDoc);
+        } else if (remote && !localEmpty) {
+          // Dispositivo con dati locali: NON tocca la WatchList, riscrive solo se serve.
+          deletedRef.current = { ...deletedRef.current, ...normalizeDoc(remote).deleted };
+          needsPush = docSignature(buildDoc(fm, em, deletedRef.current, 0)) !== docSignature(normalizeDoc(remote));
         } else if (!offlineNotice) {
-          needsPush = Boolean(Object.keys(fm).length || Object.keys(em).length);
+          needsPush = !localEmpty;
         }
       }
       if (migratedLocal) { needsPush = true; persistStores(fm, em); }
