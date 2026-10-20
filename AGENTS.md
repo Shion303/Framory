@@ -52,7 +52,19 @@ Start with `README.md` for local setup.
   "Aggiunto a Pianificato"; status is editable from both the Detail modal and the
   per-card quick `StatusPicker`.
 - Catalog sync (`syncLibrary`) enriches franchises but must never overwrite user overrides
-  (`checked`, `removed`, `order`, `partOrder`, `status`, `notes`) in `entries`. Cloud sync
+  (`checked`, `removed`, `hiddenParts`, `order`, `partOrder`, `status`, `notes`) in `entries`. Cloud sync
   *does* propagate those overrides between the user's own devices. Personal per-series
-  `notes` live on the entry and travel in the same JSON payload.
+  `notes` live on the entry and travel in the same JSON payload. Deleting a whole
+  season/movie/OVA is a tap on the "Elimina stagione" button in the title block (Detail +
+  Discovery when already added) → `removePart` adds the part id to `hiddenParts` and drops
+  its episodes from `checked`/`order`; if it was the last part, the app removes the whole
+  franchise; `orderedParts`/`partItemsMap` filter `hiddenParts` everywhere.
+- Discovery selection is smart: opening a series not in the WatchList pre-selects every
+  part and the CTA is "Aggiungi a Pianificato"; if it is already in the WatchList only the
+  new/missing parts are pre-selected and the CTA is "Aggiungi elementi selezionati". Users
+  can toggle any part. `addSelectedToWatchlist` never overwrites an existing card: for an
+  existing series it calls `mergeFranchiseParts(oldFr, newMembers)` which rebuilds the
+  franchise (correct order/labels) but restores the existing part objects, so user
+  overrides (`checked`, `notes`, `hiddenParts`, `order`, `status`) and episode data are
+  kept; only the new parts get their episode titles/thumbnails loaded.
 - Run `npm run lint`, `npm run typecheck`, and `npm run build` before finishing code changes.

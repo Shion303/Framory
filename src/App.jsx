@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Bookmark, Check, ChevronLeft, ChevronRight, Film, GripVertical, Home, Loader2, MoreVertical, Play, Plus, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
-import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, STATUS_KEYS, migrateStatus, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
+import { db, searchGroupsDetailed, defaultEntry, activeItems, computeStatus, STATUS_STYLES, STATUS_KEYS, migrateStatus, providerGetMedia, buildFranchise, previewParts, optimisticFranchise, mergeFranchiseParts, loadAllEpisodes, titleKey, syncLibrary, orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart, buildDoc, mergeDocs, normalizeDoc, docToStores, docSignature, bumpDeleted } from "./framory";
 import { syncEnabled, pullLibrary, pushLibrary, subscribeLibrary } from "./supabase";
 
 const DEBOUNCE_MS = 350;
@@ -47,6 +47,7 @@ function sanitizeStores(franchises, entries) {
       notes: text(r.notes),
       checked: asList(r.checked).filter(Boolean),
       removed: asList(r.removed).filter(Boolean),
+      hiddenParts: asList(r.hiddenParts).filter(Boolean),
       order: asList(r.order).filter(Boolean),
       partOrder: asList(r.partOrder).filter(Boolean),
       addedAt: Number(r.addedAt) || Date.now(),
@@ -400,7 +401,6 @@ export default function App() {
   const setNotes = (fid, notes) => patchEntry(fid, (en) => ({ ...en, notes: text(notes) }));
   const reorderPart = (fid, from, to) => patchEntry(fid, (en) => reorderParts(fRef.current[fid], en, from, to));
   const reorderItem = (fid, partId, from, to) => patchEntry(fid, (en) => reorderPartItems(fRef.current[fid], en, partId, from, to));
-
   // Riordino dell'INTERO franchise nella WatchList (per addedAt, che è il criterio
   // con cui `list` ordina). Scambia il valore addedAt tra fid e neighborFid.
   const reorderFranchise = useCallback((fid, neighborFid) => {
@@ -450,22 +450,77 @@ export default function App() {
     }
   }, [ready, deepenFranchise]);
 
-  const addToWatchlist = useCallback(async (gr) => {
+
+  // Smart merge: aggiunge SOLO gli elementi selezionati.
+  //  - Prima aggiunta: crea la scheda con le parti selezionate.
+  //  - Serie gia presente: accoda le nuove parti senza toccare stato, note,
+  //    episodi spuntati, stagioni eliminate o ordine personalizzato.
+  const addSelectedToWatchlist = useCallback(async (gr, selectedIds) => {
     if (!gr || addingRef.current) return;
-    const already = findExisting(gr);
-    if (already) { showToast("Gia nella WatchList"); setPreview(null); return; }
+    const sel = new Set((selectedIds || []).filter(Boolean));
+    if (!sel.size) { showToast("Nessun elemento selezionato"); return; }
     const members = (Array.isArray(gr.members) && gr.members.length ? gr.members : [gr.rep]).filter(Boolean);
     if (!members.length) { showToast("Dati non disponibili"); return; }
 
-    const nums = members.map((m) => m.malId || m.alId).filter((n) => Number.isFinite(n) && n > 0);
+    const existing = findExisting(gr);
+
+    // --- Serie gia presente: merge incrementale, nessuna sovrascrittura ---
+    if (existing) {
+      const oldFr = fRef.current[existing];
+      if (!oldFr) { showToast("Scheda non trovata"); return; }
+      const known = new Set((oldFr.parts || []).map((p) => p.id).concat(oldFr.memberIds || []));
+      const newMembers = members.filter((m) => sel.has(m.id) && !known.has(m.id));
+      if (!newMembers.length) { showToast("Nessun nuovo elemento da aggiungere"); setPreview(null); return; }
+      addingRef.current = true;
+      try {
+        // Ricostruisce l'intera opera (media vecchi + nuovi) per ordine/label corretti,
+        // poi ripristina i dati delle parti gia esistenti (episodi, epoche ecc.).
+        const prevByPart = new Map((oldFr.parts || []).map((p) => [p.id, p]));
+        const { franchise: nf, added } = mergeFranchiseParts(oldFr, newMembers);
+        if (!added || !nf) { showToast("Nessun nuovo elemento da aggiungere"); setPreview(null); return; }
+        fRef.current = { ...fRef.current, [existing]: nf };
+        setFranchises({ ...fRef.current });
+        setAddedKey(gr.key);
+        setPreview(null);
+        showToast(`${added} elementi aggiunti`);
+        db.franchises.put(nf).catch((e) => console.warn("[merge] persist", e));
+        schedulePush();
+
+        // Carica titoli/immagini delle sole NUOVE parti, senza toccare gli override utente.
+        const freshParts = nf.parts.filter((p) => !prevByPart.has(p.id));
+        const dbg = genRef.current.get(existing) || 0;
+        genRef.current.set(existing, dbg + 1);
+        const gen = genRef.current.get(existing);
+        await loadAllEpisodes(freshParts);
+        if (gen !== genRef.current.get(existing) || !fRef.current[existing]) return;
+        const cur = fRef.current[existing];
+        const byId = new Map(freshParts.map((p) => [p.id, p]));
+        const withEps = { ...cur, parts: cur.parts.map((p) => byId.get(p.id) || p), updatedAt: Date.now() };
+        fRef.current = { ...fRef.current, [existing]: withEps };
+        setFranchises({ ...fRef.current });
+        db.franchises.put(withEps).catch(() => {});
+        schedulePush();
+      } catch (e) {
+        console.warn("[merge]", e);
+        showToast("Errore aggiunta");
+      } finally {
+        addingRef.current = false;
+        setTimeout(() => setAddedKey((cur) => (cur === gr.key ? null : cur)), 1200);
+      }
+      return;
+    }
+
+    // --- Prima aggiunta: solo gli elementi selezionati ---
+    const chosen = members.filter((m) => sel.has(m.id));
+    if (!chosen.length) { showToast("Nessun elemento selezionato"); return; }
+    const nums = chosen.map((m) => m.malId || m.alId).filter((n) => Number.isFinite(n) && n > 0);
     const fid = nums.length ? `f:${Math.min(...nums)}` : `f:${titleKey(gr.title).replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}`;
     if (fRef.current[fid]) { showToast("Gia nella WatchList"); setPreview(null); return; }
 
     addingRef.current = true;
     try {
-      const fr = optimisticFranchise(members, gr.title, fid);
+      const fr = optimisticFranchise(chosen, gr.title, fid);
       const en = defaultEntry(fid);
-
       fRef.current = { ...fRef.current, [fid]: fr };
       eRef.current = { ...eRef.current, [fid]: en };
       setFranchises({ ...fRef.current });
@@ -481,7 +536,7 @@ export default function App() {
 
       schedulePush();
       genRef.current.set(fid, (genRef.current.get(fid) || 0) + 1);
-      deepenFranchise(fid, members.map((m) => m.id), gr.title, genRef.current.get(fid));
+      deepenFranchise(fid, chosen.map((m) => m.id), gr.title, genRef.current.get(fid));
     } catch (e) {
       console.warn("[add]", e);
       showToast("Errore aggiunta");
@@ -512,6 +567,19 @@ export default function App() {
       deletedRef.current = bumpDeleted(deletedRef.current, fid);
       schedulePush();
     } catch (e) { console.warn("[remove]", e); showToast("Errore rimozione"); }
+  };
+
+  // Elimina un'intera stagione/film/OVA: aggiorna lo stato locale, IndexedDB e cloud.
+  // Se era l'ultima parte rimasta, rimuove l'intera scheda dalla WatchList.
+  const removeSeason = (fid, partId) => {
+    try {
+      const fr = fRef.current[fid];
+      const en = eRef.current[fid] || defaultEntry(fid);
+      const remaining = orderedParts(fr, removePart(en, partId)).length;
+      if (!remaining) { removeFromWatchlist(fid); return; }
+      patchEntry(fid, (cur) => removePart(cur, partId));
+      showToast("Stagione rimossa");
+    } catch (e) { console.warn("[removeSeason]", e); showToast("Errore rimozione"); }
   };
 
   const list = useMemo(
@@ -569,14 +637,17 @@ export default function App() {
           onCheck={toggleCheck} onRemoveItem={removeItem}
           onSetStatus={setStatus} onSetNotes={setNotes}
           onReorderPart={reorderPart} onReorderItem={reorderItem}
+          onRemoveSeason={removeSeason}
           onDelete={() => removeFromWatchlist(detailId)}
         />
       )}
       {preview && (
         <DiscoveryModal
           gr={preview} exists={previewFid} existsEn={previewFid ? entries[previewFid] : null}
+          existsFr={previewFid ? franchises[previewFid] : null}
           justAdded={addedKey === preview.key} onClose={() => setPreview(null)}
-          onAdd={addToWatchlist} onRemove={removeFromWatchlist} onSetStatus={setStatus}
+          onRemove={removeFromWatchlist} onSetStatus={setStatus}
+          onRemoveSeason={removeSeason} onAddSelected={addSelectedToWatchlist}
         />
       )}
       {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={importData} lastSync={lastSync} syncState={syncState} />}
@@ -816,9 +887,30 @@ function StatusPicker({ en, current, onSetStatus, compact }) {
   );
 }
 
-function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRemove, onSetStatus }) {
-  const parts = useMemo(() => previewParts(gr.members || []), [gr]);
+function DiscoveryModal({ gr, exists, existsEn, existsFr, justAdded, onClose, onRemove, onSetStatus, onRemoveSeason, onAddSelected }) {
+  const hidden = useMemo(() => new Set(existsEn?.hiddenParts || []), [existsEn]);
+  const parts = useMemo(() => previewParts(gr.members || []).filter((p) => !hidden.has(p.id)), [gr, hidden]);
   const total = parts.reduce((n, p) => n + (p.episodes || 0), 0);
+
+  // Elementi gia presenti nella scheda salvata (per non sovrascriverli).
+  const knownIds = useMemo(() => {
+    const set = new Set();
+    for (const p of (existsFr?.parts || [])) set.add(p.id);
+    for (const id of (existsFr?.memberIds || [])) set.add(id);
+    return set;
+  }, [existsFr]);
+
+  // Selezione iniziale smart:
+  //  - non in WatchList -> tutti selezionati
+  //  - gia presente      -> solo i nuovi / mancanti selezionati
+  const [selected, setSelected] = useState(() => new Set(parts.filter((p) => !exists || !knownIds.has(p.id)).map((p) => p.id)));
+  useEffect(() => {
+    setSelected(new Set(parts.filter((p) => !exists || !knownIds.has(p.id)).map((p) => p.id)));
+  }, [exists, gr.key, existsFr?.updatedAt, parts, knownIds]);
+
+  const toggle = (id) => setSelected((cur) => { const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const selectedCount = parts.filter((p) => selected.has(p.id)).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-2xl" onClick={onClose} />
@@ -854,18 +946,37 @@ function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRem
         </div>
 
         <div className="px-4 mt-4">
-          <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">Stagioni, film e OVA</div>
+          <div className="flex items-baseline justify-between mb-2">
+            <div className="text-[11px] uppercase tracking-wide text-zinc-500">Stagioni, film e OVA</div>
+            {exists && <div className="text-[10px] text-zinc-500">I nuovi/mancanti sono gia selezionati</div>}
+          </div>
           <div className="flex flex-col gap-1.5">
-            {parts.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-2">
-                <div className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center ${p.finished ? "bg-violet-500 border-violet-400" : "border-white/20"}`}>{p.finished && <Check className="w-3.5 h-3.5" />}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[13px] line-clamp-1">{p.title}</div>
-                  <div className="text-[10px] text-zinc-500">{p.label}{p.episodes ? ` - ${p.episodes} ep` : ""}{p.year ? ` - ${p.year}` : ""}</div>
+            {parts.map((p) => {
+              const inCard = knownIds.has(p.id);
+              const isSel = selected.has(p.id);
+              return (
+                <div key={p.id} className={`flex items-center gap-3 rounded-2xl border p-2 transition-all duration-300 ${isSel ? "border-violet-400/40 bg-violet-500/10" : "border-white/10 bg-white/[0.04]"}`}>
+                  <button onClick={() => toggle(p.id)} aria-label={`Seleziona ${p.title}`} className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center transition-all duration-300 active:scale-95 ${isSel ? "bg-violet-500 border-violet-400" : "border-white/20"}`}>{isSel && <Check className="w-3.5 h-3.5" />}</button>
+                  <button onClick={() => toggle(p.id)} className="flex-1 min-w-0 text-left">
+                    <div className="text-[13px] line-clamp-1">{p.title}</div>
+                    <div className="text-[10px] text-zinc-500">{p.label}{p.episodes ? ` - ${p.episodes} ep` : ""}{p.year ? ` - ${p.year}` : ""}</div>
+                  </button>
+                  {exists && inCard && (
+                    <span className="shrink-0 rounded-full border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] text-zinc-400">gia presente</span>
+                  )}
+                  <span className={`text-[10px] shrink-0 px-1.5 py-0.5 rounded-full border ${p.finished ? "border-emerald-400/40 text-emerald-300 bg-emerald-400/10" : p.status === "airing" ? "border-sky-400/40 text-sky-300 bg-sky-400/10" : "border-white/15 text-zinc-400"}`}>{PART_STATE[p.status] || "Data TBA"}</span>
+                  {exists && inCard && (
+                    <button
+                      onClick={() => onRemoveSeason(exists, p.id)}
+                      aria-label={`Elimina stagione ${p.title}`}
+                      className="flex shrink-0 items-center gap-1 rounded-xl border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-[10px] font-medium text-red-400 backdrop-blur-xl transition-all duration-300 hover:bg-red-500/20 active:scale-95"
+                    >
+                      <Trash2 className="w-3 h-3" />Elimina
+                    </button>
+                  )}
                 </div>
-                <span className={`text-[10px] shrink-0 px-1.5 py-0.5 rounded-full border ${p.finished ? "border-emerald-400/40 text-emerald-300 bg-emerald-400/10" : p.status === "airing" ? "border-sky-400/40 text-sky-300 bg-sky-400/10" : "border-white/15 text-zinc-400"}`}>{PART_STATE[p.status] || "Data TBA"}</span>
-              </div>
-            ))}
+              );
+            })}
             {!parts.length && <div className="text-xs text-zinc-500">Nessun elemento trovato.</div>}
           </div>
           {total > 0 && <div className="text-[11px] text-zinc-500 mt-2">{total} episodi complessivi</div>}
@@ -880,13 +991,28 @@ function DiscoveryModal({ gr, exists, existsEn, justAdded, onClose, onAdd, onRem
 
         <div className="sticky bottom-0 mt-5 bg-[#0d0d13]/85 px-4 pt-2 pb-1 backdrop-blur-2xl">
           {exists ? (
-            <button onClick={() => onRemove(exists)} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-3 text-sm font-medium text-red-300">
-              <Trash2 className="w-4 h-4" />Rimuovi dalla WatchList
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => onAddSelected(gr, [...selected])}
+                disabled={selectedCount === 0}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-500 py-3 text-sm font-medium text-white transition active:scale-[0.99] disabled:opacity-40"
+              >
+                <Plus className="w-4 h-4" />Aggiungi elementi selezionati{selectedCount ? ` (${selectedCount})` : ""}
+              </button>
+              <button onClick={() => onRemove(exists)} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-2.5 text-sm font-medium text-red-300 transition active:scale-95">
+                <Trash2 className="w-4 h-4" />Rimuovi dalla WatchList
+              </button>
+            </div>
           ) : (
-            <button onClick={() => onAdd(gr)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-500 py-3 text-sm font-medium text-white active:scale-[0.99] transition">
-              {justAdded ? <><Check className="w-4 h-4" />Aggiunto</> : <><Plus className="w-4 h-4" />Aggiungi alla WatchList</>}
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => onAddSelected(gr, [...selected])}
+                disabled={selectedCount === 0}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-500 py-3 text-sm font-medium text-white transition active:scale-[0.99] disabled:opacity-40"
+              >
+                {justAdded ? <><Check className="w-4 h-4" />Aggiunto</> : <><Plus className="w-4 h-4" />Aggiungi a Pianificato{selectedCount && selectedCount !== parts.length ? ` (${selectedCount})` : ""}</>}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1008,7 +1134,7 @@ function WatchlistTab({ list, onOpen, onReorder, onDelete }) {
   );
 }
 
-function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSetNotes, onReorderPart, onReorderItem, onDelete }) {
+function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSetNotes, onReorderPart, onReorderItem, onRemoveSeason, onDelete }) {
   const [openId, setOpenId] = useState(() => (fr.parts || [])[0]?.id ?? null);
   const [drag, setDrag] = useState(null);
   const [touch, setTouch] = useState(null);
@@ -1125,6 +1251,13 @@ function Detail({ fr, en, fid, onClose, onCheck, onRemoveItem, onSetStatus, onSe
                       <ChevronRight className={`w-4 h-4 shrink-0 text-zinc-600 transition-transform ${isOpen ? "rotate-90" : ""}`} />
                     </button>
                     <div className="flex items-center pr-2 cursor-grab"><GripVertical className="w-4 h-4 text-zinc-600" /></div>
+                    <button
+                      onClick={() => onRemoveSeason(fid, p.id)}
+                      aria-label={`Elimina stagione ${p.label}`}
+                      className="flex shrink-0 items-center gap-1 self-center rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-[11px] font-medium text-red-400 backdrop-blur-xl transition-all duration-300 hover:bg-red-500/20 active:scale-95 mr-2"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />Elimina stagione
+                    </button>
                   </div>
                   {isOpen && (
                     <div className="px-2 pb-2 flex flex-col gap-1.5">

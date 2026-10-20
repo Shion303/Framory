@@ -623,6 +623,30 @@ function buildFranchise(medias, title, exp) {
 }
 function previewParts(medias) { return planParts(medias); }
 
+// Merge sicuro: accoda SOLO le nuove parti (newMembers) a una scheda esistente
+// senza sovrascrivere alcun dato utente (episodi caricati, stato, ecc.).
+// Ritorna { franchise, added } dove `added` e il numero di parti realmente nuove.
+function mergeFranchiseParts(oldFr, newMembers) {
+  const known = new Set((oldFr?.parts || []).map((p) => p.id).concat(oldFr?.memberIds || []));
+  const fresh = (newMembers || []).filter((m) => m && !known.has(m.id));
+  if (!fresh.length) return { franchise: oldFr, added: 0 };
+  const allMedia = [...(oldFr.parts || []).map((p) => p.media).filter(Boolean), ...fresh];
+  const rebuilt = buildFranchise(allMedia, oldFr.title, oldFr.id);
+  const prevByPart = new Map((oldFr.parts || []).map((p) => [p.id, p]));
+  const parts = rebuilt.parts.map((p) => (prevByPart.has(p.id) ? { ...prevByPart.get(p.id), media: p.media, kind: p.kind } : p));
+  const allFinished = parts.every((p) => p.finished);
+  const franchise = {
+    ...oldFr,
+    title: oldFr.title || rebuilt.title, cover: oldFr.cover || rebuilt.cover,
+    banner: oldFr.banner || rebuilt.banner, synopsis: oldFr.synopsis || rebuilt.synopsis,
+    year: oldFr.year ?? rebuilt.year, score: oldFr.score ?? rebuilt.score,
+    parts, memberIds: parts.map((p) => p.id),
+    status: allFinished ? "finished" : "airing", finished: allFinished,
+    updatedAt: Date.now(),
+  };
+  return { franchise, added: fresh.length };
+}
+
 function optimisticFranchise(medias, title, exp) {
   const fr = buildFranchise(medias, title, exp);
   fr.parts = fr.parts.map((p) => {
@@ -637,16 +661,26 @@ function optimisticFranchise(medias, title, exp) {
   return fr;
 }
 
-const defaultEntry = (id) => ({ franchiseId: id, status: "planned", notes: "", checked: [], removed: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
+const defaultEntry = (id) => ({ franchiseId: id, status: "planned", notes: "", checked: [], removed: [], hiddenParts: [], order: [], partOrder: [], addedAt: Date.now(), updatedAt: Date.now() });
 
 function orderedParts(fr, en) {
-  const parts = (fr.parts || []).slice();
+  const hidden = new Set((en && en.hiddenParts) || []);
+  const parts = (fr.parts || []).filter((p) => p && !hidden.has(p.id));
   const po = en && en.partOrder;
   if (Array.isArray(po) && po.length) {
     const pos = new Map(po.map((id, i) => [id, i]));
     parts.sort((a, b) => ((pos.get(a.id) ?? 1e6) - (pos.get(b.id) ?? 1e6)));
   }
   return parts;
+}
+
+// Rimuove un'intera parte (stagione/film/OVA) marcandola come nascosta (override utente).
+function removePart(en, partId) {
+  const hidden = new Set((en && en.hiddenParts) || []);
+  hidden.add(partId);
+  const checked = (en.checked || []).filter((id) => !String(id).startsWith(`${partId}:`));
+  const order = (en.order || []).filter((id) => !String(id).startsWith(`${partId}:`));
+  return { ...en, hiddenParts: [...hidden], checked, order };
 }
 
 const sortIds = (ids, order) => {
@@ -968,7 +1002,7 @@ export function docSignature(doc) {
 
 export {
   searchGroups, searchGroupsDetailed, groupResults, defaultEntry, activeItems, computeStatus, STATUS_STYLES, MANUAL_STATUS, STATUS_KEYS, migrateStatus,
-  providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes,
-  orderedParts, partItemsMap, reorderParts, reorderPartItems,
+  providerGetMedia, buildFranchise, previewParts, optimisticFranchise, loadPartEpisodes, loadAllEpisodes, defaultEpisodes, mergeFranchiseParts,
+  orderedParts, partItemsMap, reorderParts, reorderPartItems, removePart,
   titleKey, syncLibrary,
 };
